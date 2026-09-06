@@ -13,47 +13,74 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Attractive Dark CSS UI
+# Custom Attractive Sea Blue CSS Theme
 st.markdown("""
 <style>
-    .main {
-        background-color: #0b0e14;
+    /* Main Background - Deep Sea Blue */
+    .stApp {
+        background: linear-gradient(180deg, #0a192f 0%, #0d2538 50%, #071626 100%) !important;
+        color: #e6f1ff;
     }
-    .metric-card {
-        background: linear-gradient(145deg, #161b22, #0d1117);
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        margin-bottom: 12px;
+    
+    /* Sidebar Sea Blue Theme */
+    section[data-testid="stSidebar"] {
+        background-color: #071829 !important;
+        border-right: 1px solid #1e3a5f;
     }
+    
+    /* Pre-Breakout Card (Sea Blue with Glowing Cyan Border) */
     .pre-breakout-card {
-        background: linear-gradient(135deg, rgba(234, 179, 8, 0.1), rgba(22, 27, 34, 0.9));
-        border: 1.5px solid #eab308;
-        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(10, 42, 74, 0.85), rgba(7, 24, 41, 0.95));
+        border: 1.5px solid #00d2ff;
+        border-radius: 14px;
         padding: 18px;
         margin-bottom: 15px;
+        box-shadow: 0 4px 15px rgba(0, 210, 255, 0.15);
     }
-    .badge {
+    
+    /* Live Breakout Card */
+    .metric-card {
+        background: linear-gradient(135deg, rgba(13, 37, 63, 0.85), rgba(8, 22, 36, 0.95));
+        border: 1.5px solid #00f2fe;
+        border-radius: 14px;
+        padding: 18px;
+        margin-bottom: 15px;
+        box-shadow: 0 4px 15px rgba(0, 242, 254, 0.12);
+    }
+
+    /* Badges */
+    .badge-pre {
+        background: linear-gradient(90deg, #00c6ff, #0072ff);
+        color: #ffffff;
         padding: 4px 10px;
         border-radius: 6px;
         font-weight: 700;
         font-size: 0.8rem;
     }
-    .badge-pre {
-        background-color: #eab308;
-        color: #000;
-    }
     .badge-live {
-        background-color: #22c55e;
-        color: #000;
+        background: linear-gradient(90deg, #10b981, #059669);
+        color: #ffffff;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.8rem;
+    }
+
+    /* Buttons */
+    .stButton>button {
+        background: linear-gradient(90deg, #0072ff 0%, #00c6ff 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 12px rgba(0, 198, 255, 0.3) !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # App Header
-st.markdown("<h1 style='text-align: center; color: #f3f4f6;'>⚡ AI Pre-Breakout Radar</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #9ca3af; font-size: 1.1rem;'>उद्या ब्रेकआउट होण्याची दाट शक्यता असणारे आणि ताजे ब्रेकआउट झालेले NSE F&O शेअर्स</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #00d2ff;'>⚡ AI Pre-Breakout Radar</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #8892b0; font-size: 1.1rem;'>उद्या ब्रेकआउट होण्याची दाट शक्यता असणारे आणि ताजे ब्रेकआउट झालेले NSE F&O शेअर्स</p>", unsafe_allow_html=True)
 
 # NSE F&O Top Watchlist
 FNO_STOCKS = [
@@ -156,9 +183,9 @@ if st.button("🚀 AI प्री-ब्रेकआउट रडार चा�
             except Exception:
                 continue
 
-    # Section 1: 1-Day Before Breakout (Pre-Breakout Ready)
-    st.markdown("---")
-    st.markdown("### 🔥 १ दिवस आधीचे सिग्नल (उद्या ब्रेकआउट होण्याची दाट शक्यता)")
+    # Section 1: 1-Day Before Breakout
+    st.markdown("<hr style='border: 0.5px solid #1e3a5f;'>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #00d2ff;'>🔥 १ दिवस आधीचे सिग्नल (उद्या ब्रेकआउट होण्याची शक्यता)</h3>", unsafe_allow_html=True)
     if pre_breakout_list:
         cols = st.columns(3)
         for i, item in enumerate(pre_breakout_list):
@@ -166,22 +193,22 @@ if st.button("🚀 AI प्री-ब्रेकआउट रडार चा�
                 st.markdown(f"""
                 <div class="pre-breakout-card">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <h3 style="margin: 0; color: #f9fafb;">{item['Symbol']}</h3>
-                        <span class="badge badge-pre">AI Score: {item['AI Score']}/100</span>
+                        <h3 style="margin: 0; color: #ffffff;">{item['Symbol']}</h3>
+                        <span class="badge-pre">AI Score: {item['AI Score']}/100</span>
                     </div>
-                    <hr style="border: 0.5px solid #374151; margin: 10px 0;">
-                    <p style="margin: 4px 0; color: #d1d5db;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
-                    <p style="margin: 4px 0; color: #d1d5db;"><b>रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
-                    <p style="margin: 4px 0; color: #fbbf24;"><b>रेजिस्टन्सपासून अंतर:</b> फक्त {item['Distance %']}%</p>
-                    <p style="margin: 4px 0; color: #9ca3af;"><b>व्हॉल्यूम:</b> {item['Volume Ratio']}x | <b>Squeeze:</b> {item['Squeeze']}</p>
-                    <small style="color: #6ee7b7;">💡 उद्या रेजिस्टन्स पार करताच मोठ्या तेजीची शक्यता.</small>
+                    <hr style="border: 0.5px solid #1e3a5f; margin: 10px 0;">
+                    <p style="margin: 4px 0; color: #ccd6f6;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
+                    <p style="margin: 4px 0; color: #ccd6f6;"><b>रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
+                    <p style="margin: 4px 0; color: #64ffda;"><b>रेजिस्टन्सपासून अंतर:</b> फक्त {item['Distance %']}%</p>
+                    <p style="margin: 4px 0; color: #8892b0;"><b>व्हॉल्यूम:</b> {item['Volume Ratio']}x | <b>Squeeze:</b> {item['Squeeze']}</p>
+                    <small style="color: #00c6ff;">💡 उद्या रेजिस्टन्स पार करताच मोठ्या तेजीची शक्यता.</small>
                 </div>
                 """, unsafe_allow_html=True)
     else:
         st.info("सध्या निवडलेल्या निकषांवर प्री-ब्रेकआउट स्टेजमधील कोणताही शेअर सापडला नाही.")
 
     # Section 2: Live Confirmed Breakouts
-    st.markdown("### 🚀 आज ब्रेकआउट झालेले शेअर्स (Live Breakout)")
+    st.markdown("<h3 style='color: #00f2fe; margin-top: 25px;'>🚀 आज ब्रेकआउट झालेले शेअर्स (Live Breakout)</h3>", unsafe_allow_html=True)
     if live_breakout_list:
         cols_live = st.columns(3)
         for i, item in enumerate(live_breakout_list):
@@ -189,28 +216,28 @@ if st.button("🚀 AI प्री-ब्रेकआउट रडार चा�
                 st.markdown(f"""
                 <div class="metric-card">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <h3 style="margin: 0; color: #f9fafb;">{item['Symbol']}</h3>
-                        <span class="badge badge-live">Live Breakout</span>
+                        <h3 style="margin: 0; color: #ffffff;">{item['Symbol']}</h3>
+                        <span class="badge-live">Live Breakout</span>
                     </div>
-                    <hr style="border: 0.5px solid #374151; margin: 10px 0;">
-                    <p style="margin: 4px 0; color: #d1d5db;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
-                    <p style="margin: 4px 0; color: #d1d5db;"><b>तुटलेला रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
-                    <p style="margin: 4px 0; color: #22c55e;"><b>व्हॉल्यूम सर्ज:</b> {item['Volume Ratio']}x</p>
+                    <hr style="border: 0.5px solid #1e3a5f; margin: 10px 0;">
+                    <p style="margin: 4px 0; color: #ccd6f6;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
+                    <p style="margin: 4px 0; color: #ccd6f6;"><b>तुटलेला रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
+                    <p style="margin: 4px 0; color: #10b981;"><b>व्हॉल्यूम सर्ज:</b> {item['Volume Ratio']}x</p>
                 </div>
                 """, unsafe_allow_html=True)
     else:
         st.info("आज कोणत्याही शेअरने रेजिस्टन्स तोडलेला नाही.")
 
     # Section 3: Detailed Table
-    st.markdown("---")
-    st.subheader("📋 संपूर्ण स्कॅनिंग डेटा टेबल")
+    st.markdown("<hr style='border: 0.5px solid #1e3a5f;'>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #00d2ff;'>📋 संपूर्ण स्कॅनिंग डेटा टेबल</h3>", unsafe_allow_html=True)
     full_df = pd.DataFrame(pre_breakout_list + live_breakout_list + normal_list)
     if not full_df.empty:
         st.dataframe(full_df[['Symbol', 'LTP', 'Change %', 'Resistance', 'Distance %', 'Volume Ratio', 'Squeeze', 'Status', 'AI Score']], use_container_width=True)
 
 # ----------------- Single Interactive Visualizer -----------------
-st.markdown("---")
-st.subheader("🔍 चार्टवर कन्सोलिडेशन आणि लेव्हल्स तपासा")
+st.markdown("<hr style='border: 0.5px solid #1e3a5f;'>", unsafe_allow_html=True)
+st.markdown("<h3 style='color: #00d2ff;'>🔍 चार्टवर कन्सोलिडेशन आणि लेव्हल्स तपासा</h3>", unsafe_allow_html=True)
 chart_stock = st.selectbox("स्टॉक निवडा:", FNO_STOCKS)
 chart_df = yf.download(chart_stock, period="6mo", interval="1d", progress=False)
 
@@ -230,8 +257,18 @@ if not chart_df.empty:
     ))
     
     # Resistance Line
-    fig.add_hline(y=res_val, line_dash="dash", line_color="#eab308", 
+    fig.add_hline(y=res_val, line_dash="dash", line_color="#00d2ff", 
                   annotation_text=f"Breakout Trigger Level: ₹{res_val:.2f}", annotation_position="top right")
 
-    fig.update_layout(template="plotly_dark", height=480, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+    # Deep Sea Blue Chart Layout
+    fig.update_layout(
+        paper_bgcolor="#071829",
+        plot_bgcolor="#0a1f36",
+        height=480,
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=10, r=10, t=30, b=10),
+        font=dict(color="#ccd6f6"),
+        xaxis=dict(gridcolor="#13314d"),
+        yaxis=dict(gridcolor="#13314d")
+    )
     st.plotly_chart(fig, use_container_width=True)
