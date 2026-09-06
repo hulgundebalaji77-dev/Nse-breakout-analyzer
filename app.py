@@ -5,157 +5,233 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.signal import find_peaks
 
-st.set_page_config(page_title="NSE F&O Full Breakout Scanner", layout="wide")
-st.title("🎯 NSE F&O Breakout & Trend Scanner (All Stocks)")
+# Page Settings
+st.set_page_config(
+    page_title="AI Pre-Breakout Radar",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# NSE F&O मधील प्रमुख १८०+ स्टॉक्सची संपूर्ण यादी (.NS सह)
+# Custom Attractive Dark CSS UI
+st.markdown("""
+<style>
+    .main {
+        background-color: #0b0e14;
+    }
+    .metric-card {
+        background: linear-gradient(145deg, #161b22, #0d1117);
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        margin-bottom: 12px;
+    }
+    .pre-breakout-card {
+        background: linear-gradient(135deg, rgba(234, 179, 8, 0.1), rgba(22, 27, 34, 0.9));
+        border: 1.5px solid #eab308;
+        border-radius: 12px;
+        padding: 18px;
+        margin-bottom: 15px;
+    }
+    .badge {
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.8rem;
+    }
+    .badge-pre {
+        background-color: #eab308;
+        color: #000;
+    }
+    .badge-live {
+        background-color: #22c55e;
+        color: #000;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# App Header
+st.markdown("<h1 style='text-align: center; color: #f3f4f6;'>⚡ AI Pre-Breakout Radar</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #9ca3af; font-size: 1.1rem;'>उद्या ब्रेकआउट होण्याची दाट शक्यता असणारे आणि ताजे ब्रेकआउट झालेले NSE F&O शेअर्स</p>", unsafe_allow_html=True)
+
+# NSE F&O Top Watchlist
 FNO_STOCKS = [
-    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
-    "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", "APOLLOHOSP.NS", 
-    "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", 
-    "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", "BAJAJFINSV.NS", 
-    "BAJFINANCE.NS", "BALKRISIND.NS", "BALRAMCHIN.NS", "BANDHANBNK.NS", "BANKBARODA.NS", 
-    "BATAINDIA.NS", "BEL.NS", "BERGEPAINT.NS", "BHARATFORG.NS", "BHARTIARTL.NS", 
-    "BHEL.NS", "BIOCON.NS", "BOSCHLTD.NS", "BPCL.NS", "BRITANNIA.NS", "BSOFT.NS", 
-    "CANBK.NS", "CANFINHOME.NS", "CHAMBLFERT.NS", "CHOLAFIN.NS", "CIPLA.NS", 
-    "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", "COROMANDEL.NS", 
-    "CROMPTON.NS", "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", "DEEPAKNTR.NS", 
-    "DELHIVERY.NS", "DIVISLAB.NS", "DIXON.NS", "DLF.NS", "DRREDDY.NS", "EICHERMOT.NS", 
-    "ESCORTS.NS", "EXIDEIND.NS", "FEDERALBNK.NS", "GAIL.NS", "GLENMARK.NS", "GMRINFRA.NS", 
-    "GNFC.NS", "GODREJCP.NS", "GODREJPROP.NS", "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", 
-    "HAL.NS", "HAVELLS.NS", "HCLTECH.NS", "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", 
-    "HEROMOTOCO.NS", "HINDALCO.NS", "HINDCOPPER.NS", "HINDPETRO.NS", "HINDUNILVR.NS", 
-    "ICICIBANK.NS", "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", "IDFCFIRSTB.NS", "IEX.NS", 
-    "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDIAMART.NS", "INDIGO.NS", "INDUSINDBK.NS", 
-    "INDUSTOWER.NS", "INFY.NS", "IOC.NS", "IPCALAB.NS", "IRCTC.NS", "ITC.NS", 
-    "JINDALSTEL.NS", "JKCEMENT.NS", "JSWSTEEL.NS", "JUBLFOOD.NS", "KOTAKBANK.NS", 
-    "LALPATHLAB.NS", "LAURUSLABS.NS", "LICHSGFIN.NS", "LT.NS", "LTF.NS", "LTIM.NS", 
-    "LTTS.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", "MARICO.NS", 
-    "MARUTI.NS", "MCX.NS", "METROPOLIS.NS", "MFSL.NS", "MGL.NS", "MOTHERSON.NS", 
-    "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAUKRI.NS", "NAVINFLUOR.NS", 
-    "NESTLEIND.NS", "NMDC.NS", "NTPC.NS", "OBEROIRLTY.NS", "OFSS.NS", "ONGC.NS", 
-    "PAGEIND.NS", "PEL.NS", "PERSISTENT.NS", "PETRONET.NS", "PFC.NS", "PIDILITIND.NS", 
-    "PIIND.NS", "PNB.NS", "POLYCAB.NS", "POWERGRID.NS", "PVRINOX.NS", "RAMCOCEM.NS", 
-    "RBLBANK.NS", "RECLTD.NS", "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS", 
-    "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", "SUNPHARMA.NS", 
-    "SUNTV.NS", "SYNGENE.NS", "TATACHEM.NS", "TATACOMM.NS", "TATACONSUM.NS", 
-    "TATAMOTORS.NS", "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", 
-    "TORNTPHARM.NS", "TORNTPOWER.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACEMCO.NS", 
-    "UPL.NS", "VEDL.NS", "VOLTAS.NS", "WIPRO.NS", "ZYDUSLIFE.NS"
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
+    "BHARTIARTL.NS", "TATAMOTORS.NS", "ITC.NS", "LT.NS", "BSE.NS", "KPITTECH.NS",
+    "CUMMINSIND.NS", "HAL.NS", "DIXON.NS", "BEL.NS", "TRENT.NS", "COALINDIA.NS",
+    "M&M.NS", "SUNPHARMA.NS", "AXISBANK.NS", "BAJFINANCE.NS", "CHOLAFIN.NS",
+    "PERSISTENT.NS", "POLYCAB.NS", "MCX.NS", "NAUKRI.NS", "TATASTEEL.NS", "VOLTAS.NS"
 ]
 
-app_mode = st.sidebar.radio("मोड निवडा:", ["🚀 Scan All F&O Stocks", "📈 Individual Chart Analyzer"])
+# Sidebar
+st.sidebar.title("🎛️ स्कॅनर कंट्रोल्स")
+scan_universe = st.sidebar.multiselect("स्कॅन करण्यासाठी स्टॉक्स निवडा:", FNO_STOCKS, default=FNO_STOCKS[:15])
+proximity_threshold = st.sidebar.slider("रेजिस्टन्स जवळीक मर्यादा (%)", 0.5, 3.0, 1.5, 0.1)
+squeeze_lookback = st.sidebar.slider("कन्सोलिडेशन तपासणी दिवस", 5, 15, 7)
 
-# ----------------- मोड १: सर्व F&O स्टॉक्स स्कॅन -----------------
-if app_mode == "🚀 Scan All F&O Stocks":
-    st.subheader(f"📊 NSE F&O ब्रेकआउट स्कॅनर ({len(FNO_STOCKS)} स्टॉक्स)")
+# Calculation Engine
+def analyze_pre_breakout(df, proximity, squeeze_days):
+    if len(df) < 35:
+        return None
     
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        min_vol_mult = st.slider("किमान व्हॉल्यूम पटीत (Volume Multiple vs 20 MA):", 1.0, 3.0, 1.5, 0.1)
-    with col2:
-        st.write("")
-        st.write("")
-        start_scan = st.button("⚡ संपूर्ण F&O लिस्ट स्कॅन करा", use_container_width=True)
-
-    if start_scan:
-        with st.spinner("सर्व F&O स्टॉक्सचा डेटा डाउनलोड आणि स्कॅन होत आहे... कृपया १०-१५ सेकंद थांबा."):
-            # बॅच डाऊनलोड (सर्व स्टॉक्स एकत्र डाऊनलोड होतात)
-            all_data = yf.download(FNO_STOCKS, period="6mo", interval="1d", group_by='ticker', progress=False)
-            
-            results = []
-            for ticker in FNO_STOCKS:
-                try:
-                    df = all_data[ticker].dropna()
-                    if df.empty or len(df) < 30:
-                        continue
-                    
-                    highs = df['High'].values
-                    lows = df['Low'].values
-                    peaks, _ = find_peaks(highs, distance=5)
-                    troughs, _ = find_peaks(-lows, distance=5)
-
-                    if len(peaks) == 0 or len(troughs) == 0:
-                        continue
-
-                    res_level = highs[peaks[-1]]
-                    sup_level = lows[troughs[-1]]
-                    ltp = df['Close'].iloc[-1]
-                    prev_close = df['Close'].iloc[-2]
-                    curr_vol = df['Volume'].iloc[-1]
-                    avg_vol = df['Volume'].iloc[-21:-1].mean()
-                    vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 1.0
-                    pct_chg = ((ltp - prev_close) / prev_close) * 100
-
-                    status = "Consolidation"
-                    if ltp > res_level:
-                        status = "🔥 Confirmed Breakout" if vol_ratio >= min_vol_mult else "⚠️ Weak Breakout"
-                    elif ltp < sup_level:
-                        status = "🔻 Breakdown"
-
-                    results.append({
-                        "Stock": ticker,
-                        "LTP (₹)": round(ltp, 2),
-                        "Change %": round(pct_chg, 2),
-                        "Resistance (₹)": round(res_level, 2),
-                        "Support (₹)": round(sup_level, 2),
-                        "Volume Ratio": f"{round(vol_ratio, 2)}x",
-                        "Status": status
-                    })
-                except Exception:
-                    continue
-
-        if results:
-            res_df = pd.DataFrame(results)
-            
-            # फिल्टर: फक्त ब्रेकआउट झालेले शेअर्स
-            breakouts = res_df[res_df["Status"].str.contains("Breakout")]
-            
-            st.success(f"✅ स्कॅनिंग पूर्ण! एकूण {len(results)} स्टॉक्स स्कॅन झाले.")
-            
-            st.subheader(f"🔥 ब्रेकआउट झालेले F&O शेअर्स ({len(breakouts)})")
-            if not breakouts.empty:
-                st.dataframe(breakouts.sort_values(by="Change %", ascending=False), use_container_width=True)
-            else:
-                st.info("आज कोणत्याही F&O शेअरने रेजिस्टन्स तोडलेला नाही.")
-
-            st.write("---")
-            with st.expander("सर्व F&O स्टॉक्सची यादी पहा"):
-                st.dataframe(res_df, use_container_width=True)
-
-# ----------------- मोड २: सिंगल चार्ट अनालिसिस -----------------
-else:
-    st.subheader("📈 F&O स्टॉक चार्ट व्ह्यूअर")
-    selected_stock = st.selectbox("स्टॉक निवडा:", FNO_STOCKS, index=FNO_STOCKS.index("RELIANCE.NS"))
-    
-    df = yf.download(selected_stock, period="6mo", interval="1d", progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.reset_index(inplace=True)
-
     highs = df['High'].values
     lows = df['Low'].values
-    peaks, _ = find_peaks(highs, distance=5)
-    troughs, _ = find_peaks(-lows, distance=5)
+    closes = df['Close'].values
+    volumes = df['Volume'].values
+
+    # Find swing highs using peak detection
+    peaks, _ = find_peaks(highs[:-2], distance=4)
+    if len(peaks) == 0:
+        return None
+
+    res_level = highs[peaks[-1]]
+    ltp = closes[-1]
+    prev_close = closes[-2]
+    pct_change = ((ltp - prev_close) / prev_close) * 100
+    
+    # Distance to resistance
+    dist_to_res = ((res_level - ltp) / ltp) * 100
+
+    # Volume parameters
+    avg_vol_20 = volumes[-21:-1].mean()
+    curr_vol = volumes[-1]
+    vol_ratio = curr_vol / avg_vol_20 if avg_vol_20 > 0 else 1.0
+
+    # Consolidation Squeeze Check (NR7 / Range compression)
+    recent_ranges = highs[-squeeze_days:] - lows[-squeeze_days:]
+    is_squeeze = recent_ranges[-1] < (recent_ranges.mean() * 0.85)
+
+    # Status Detection
+    status = "Normal"
+    score = 0
+    
+    # Condition A: Already Broken Out
+    if ltp > res_level:
+        status = "Live Breakout"
+        score = 95 if vol_ratio >= 1.5 else 75
+    # Condition B: One-Day Before Breakout (Pre-Breakout Alert)
+    elif 0.0 <= dist_to_res <= proximity:
+        if is_squeeze or (0.9 <= vol_ratio <= 2.0):
+            status = "Pre-Breakout Ready"
+            score = 90 if is_squeeze else 80
+        else:
+            status = "Near Resistance"
+            score = 65
+
+    return {
+        "LTP": round(ltp, 2),
+        "Change %": round(pct_change, 2),
+        "Resistance": round(res_level, 2),
+        "Distance %": round(dist_to_res, 2),
+        "Volume Ratio": round(vol_ratio, 2),
+        "Squeeze": "होय (Active)" if is_squeeze else "नाही",
+        "Status": status,
+        "AI Score": score
+    }
+
+# Scan Execution Button
+if st.button("🚀 AI प्री-ब्रेकआउट रडार चालवा", use_container_width=True):
+    with st.spinner("बाजारातील डेटा स्कॅन होत आहे आणि AI प्रोबेबिलिटी मोजली जात आहे..."):
+        all_data = yf.download(scan_universe, period="6mo", interval="1d", group_by="ticker", progress=False)
+        
+        pre_breakout_list = []
+        live_breakout_list = []
+        normal_list = []
+
+        for sym in scan_universe:
+            try:
+                stock_df = all_data[sym].dropna()
+                res = analyze_pre_breakout(stock_df, proximity_threshold, squeeze_lookback)
+                if not res:
+                    continue
+                res["Symbol"] = sym
+                
+                if res["Status"] == "Pre-Breakout Ready":
+                    pre_breakout_list.append(res)
+                elif res["Status"] == "Live Breakout":
+                    live_breakout_list.append(res)
+                else:
+                    normal_list.append(res)
+            except Exception:
+                continue
+
+    # Section 1: 1-Day Before Breakout (Pre-Breakout Ready)
+    st.markdown("---")
+    st.markdown("### 🔥 १ दिवस आधीचे सिग्नल (उद्या ब्रेकआउट होण्याची दाट शक्यता)")
+    if pre_breakout_list:
+        cols = st.columns(3)
+        for i, item in enumerate(pre_breakout_list):
+            with cols[i % 3]:
+                st.markdown(f"""
+                <div class="pre-breakout-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0; color: #f9fafb;">{item['Symbol']}</h3>
+                        <span class="badge badge-pre">AI Score: {item['AI Score']}/100</span>
+                    </div>
+                    <hr style="border: 0.5px solid #374151; margin: 10px 0;">
+                    <p style="margin: 4px 0; color: #d1d5db;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
+                    <p style="margin: 4px 0; color: #d1d5db;"><b>रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
+                    <p style="margin: 4px 0; color: #fbbf24;"><b>रेजिस्टन्सपासून अंतर:</b> फक्त {item['Distance %']}%</p>
+                    <p style="margin: 4px 0; color: #9ca3af;"><b>व्हॉल्यूम:</b> {item['Volume Ratio']}x | <b>Squeeze:</b> {item['Squeeze']}</p>
+                    <small style="color: #6ee7b7;">💡 उद्या रेजिस्टन्स पार करताच मोठ्या तेजीची शक्यता.</small>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("सध्या निवडलेल्या निकषांवर प्री-ब्रेकआउट स्टेजमधील कोणताही शेअर सापडला नाही.")
+
+    # Section 2: Live Confirmed Breakouts
+    st.markdown("### 🚀 आज ब्रेकआउट झालेले शेअर्स (Live Breakout)")
+    if live_breakout_list:
+        cols_live = st.columns(3)
+        for i, item in enumerate(live_breakout_list):
+            with cols_live[i % 3]:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0; color: #f9fafb;">{item['Symbol']}</h3>
+                        <span class="badge badge-live">Live Breakout</span>
+                    </div>
+                    <hr style="border: 0.5px solid #374151; margin: 10px 0;">
+                    <p style="margin: 4px 0; color: #d1d5db;"><b>LTP:</b> ₹{item['LTP']} ({item['Change %']}%)</p>
+                    <p style="margin: 4px 0; color: #d1d5db;"><b>तुटलेला रेजिस्टन्स:</b> ₹{item['Resistance']}</p>
+                    <p style="margin: 4px 0; color: #22c55e;"><b>व्हॉल्यूम सर्ज:</b> {item['Volume Ratio']}x</p>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("आज कोणत्याही शेअरने रेजिस्टन्स तोडलेला नाही.")
+
+    # Section 3: Detailed Table
+    st.markdown("---")
+    st.subheader("📋 संपूर्ण स्कॅनिंग डेटा टेबल")
+    full_df = pd.DataFrame(pre_breakout_list + live_breakout_list + normal_list)
+    if not full_df.empty:
+        st.dataframe(full_df[['Symbol', 'LTP', 'Change %', 'Resistance', 'Distance %', 'Volume Ratio', 'Squeeze', 'Status', 'AI Score']], use_container_width=True)
+
+# ----------------- Single Interactive Visualizer -----------------
+st.markdown("---")
+st.subheader("🔍 चार्टवर कन्सोलिडेशन आणि लेव्हल्स तपासा")
+chart_stock = st.selectbox("स्टॉक निवडा:", FNO_STOCKS)
+chart_df = yf.download(chart_stock, period="6mo", interval="1d", progress=False)
+
+if not chart_df.empty:
+    if isinstance(chart_df.columns, pd.MultiIndex):
+        chart_df.columns = chart_df.columns.get_level_values(0)
+    chart_df.reset_index(inplace=True)
+
+    highs = chart_df['High'].values
+    peaks, _ = find_peaks(highs[:-2], distance=4)
+    res_val = highs[peaks[-1]] if len(peaks) > 0 else chart_df['High'].max()
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"
+        x=chart_df['Date'], open=chart_df['Open'], high=chart_df['High'],
+        low=chart_df['Low'], close=chart_df['Close'], name="Price Action"
     ))
+    
+    # Resistance Line
+    fig.add_hline(y=res_val, line_dash="dash", line_color="#eab308", 
+                  annotation_text=f"Breakout Trigger Level: ₹{res_val:.2f}", annotation_position="top right")
 
-    if len(peaks) >= 2:
-        p1, p2 = peaks[-2], peaks[-1]
-        slope, intercept = np.polyfit([p1, p2], [highs[p1], highs[p2]], 1)
-        ext_x = np.arange(p1, len(df))
-        fig.add_trace(go.Scatter(x=df['Date'].iloc[ext_x], y=slope * ext_x + intercept,
-                                 mode='lines', line=dict(color='red', width=2, dash='dash'), name="Resistance Trendline"))
-
-    if len(troughs) >= 2:
-        t1, t2 = troughs[-2], troughs[-1]
-        slope_s, intercept_s = np.polyfit([t1, t2], [lows[t1], lows[t2]], 1)
-        ext_x_s = np.arange(t1, len(df))
-        fig.add_trace(go.Scatter(x=df['Date'].iloc[ext_x_s], y=slope_s * ext_x_s + intercept_s,
-                                 mode='lines', line=dict(color='green', width=2, dash='dash'), name="Support Trendline"))
-
-    fig.update_layout(xaxis_rangeslider_visible=False, height=520, template="plotly_dark")
+    fig.update_layout(template="plotly_dark", height=480, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
