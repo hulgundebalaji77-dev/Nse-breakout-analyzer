@@ -16,7 +16,7 @@ st.set_page_config(
 # Custom Attractive Sea Blue CSS Theme
 st.markdown("""
 <style>
-    /* Main Background - Deep Sea Blue */
+    /* Main Background - Sea Blue */
     .stApp {
         background: linear-gradient(180deg, #0a192f 0%, #0d2538 50%, #071626 100%) !important;
         color: #e6f1ff;
