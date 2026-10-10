@@ -3,12 +3,10 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-# ----------------- App Config -----------------
-st.set_page_config(page_title="Nifty S&R Scanner", layout="wide")
-st.title("🎯 Nifty 200 Price Support & Resistance Scanner")
+st.set_page_config(page_title="Nifty Price Match Scanner", layout="wide")
+st.title("🎯 Nifty Price Match: Real Swing & EMA Levels")
 
 # ----------------- Stock List -----------------
-# Nifty प्रमुख शेअर्सची सुरक्षित यादी (ज्यामुळे Cloud वर पेज ब्लँक पडत नाही)
 NIFTY_STOCKS = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "TATAMOTORS", "SBIN", "BHARTIARTL",
     "ITC", "LT", "HINDUNILVR", "BAJFINANCE", "HINDPETRO", "JIOFIN", "BDL", "TRENT",
@@ -22,31 +20,29 @@ st.sidebar.header("⚙️ स्कॅनर सेटिंग्ज")
 
 tf_choice = st.sidebar.selectbox(
     "टाइमफ्रेम निवडा:",
-    ["1 दिवस (Daily Swing)", "1 तास (Short Term)", "15 मिनिटे (Intraday)", "1 आठवडा (Positional)"],
+    ["1 तास (Short Term)", "1 दिवस (Daily Swing)", "15 मिनिटे (Intraday)", "1 आठवडा (Positional)"],
     index=0
 )
 
 TF_MAP = {
     "15 मिनिटे (Intraday)": {"interval": "15m", "period": "5d"},
     "1 तास (Short Term)": {"interval": "60m", "period": "1mo"},
-    "1 दिवस (Daily Swing)": {"interval": "1d", "period": "6mo"},
-    "1 आठवडा (Positional)": {"interval": "1wk", "period": "1y"}
+    "1 दिवस (Daily Swing)": {"interval": "1d", "period": "1y"},
+    "1 आठवडा (Positional)": {"interval": "1wk", "period": "2y"}
 }
 
 interval = TF_MAP[tf_choice]["interval"]
 period = TF_MAP[tf_choice]["period"]
 
-tolerance = st.sidebar.slider("Tolerance / अंतर (%):", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
-
-# स्कॅन ट्रिगर
+tolerance = st.sidebar.slider("Tolerance / मॅच अंतर (%):", min_value=0.1, max_value=1.5, value=0.4, step=0.05)
 scan_clicked = st.sidebar.button("🚀 शेअर्स स्कॅन करा")
 
-# ----------------- Core Logic -----------------
+# ----------------- Scanner Logic -----------------
 def get_pivots_and_matches(symbols, interval, period, tol):
     matched = []
     tickers = [f"{s}.NS" for s in symbols]
     
-    # Batch download
+    # थेट फ्रेश डेटा डाऊनलोड
     data = yf.download(tickers=tickers, period=period, interval=interval, group_by='ticker', threads=True, progress=False)
     
     for sym in symbols:
@@ -55,49 +51,53 @@ def get_pivots_and_matches(symbols, interval, period, tol):
             if ticker not in data.columns.levels[0]:
                 continue
             df = data[ticker].dropna()
-            if len(df) < 15:
+            if len(df) < 25:
                 continue
                 
             curr = df.iloc[-1]
-            prev = df.iloc[-2]
-            
             c_close = float(curr['Close'])
             c_high = float(curr['High'])
             c_low = float(curr['Low'])
-            
-            # Pivot S1 & R1
-            p = (prev['High'] + prev['Low'] + prev['Close']) / 3
-            r1 = (2 * p) - prev['Low']
-            s1 = (2 * p) - prev['High']
-            
-            # Swing High / Low (मागील 15 कॅन्डल्स)
-            swing_high = float(df['High'].iloc[-15:-1].max())
-            swing_low = float(df['Low'].iloc[-15:-1].min())
-            
+
+            # 1. EMA Levels (चार्टप्रमाणे)
+            ema20 = float(df['Close'].ewm(span=20, adjust=False).mean().iloc[-1])
+            ema50 = float(df['Close'].ewm(span=50, adjust=False).mean().iloc[-1])
+            ema200 = float(df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]) if len(df) >= 200 else None
+
+            # 2. अस्सल Swing Resistance (High) & Swing Support (Low) - चालू कॅन्डल वगळून
+            hist_df = df.iloc[:-1]
+            swing_high = float(hist_df['High'].tail(15).max())
+            swing_low = float(hist_df['Low'].tail(15).min())
+
             levels = {
-                "Swing Support": swing_low,
-                "Support 1 (S1)": s1,
                 "Swing Resistance": swing_high,
-                "Resistance 1 (R1)": r1
+                "Swing Support": swing_low,
+                "20 EMA": ema20,
+                "50 EMA": ema50
             }
-            
+            if ema200:
+                levels["200 EMA"] = ema200
+
             for lvl_name, lvl_val in levels.items():
-                diff_pct = abs(c_close - lvl_val) / lvl_val * 100
+                close_diff = abs(c_close - lvl_val) / lvl_val * 100
                 low_diff = abs(c_low - lvl_val) / lvl_val * 100
                 high_diff = abs(c_high - lvl_val) / lvl_val * 100
-                
+
                 is_hit = False
                 status = ""
-                
-                if "Support" in lvl_name:
-                    if low_diff <= tol or diff_pct <= tol:
+
+                # सपोर्ट मॅच (Swing Low किंवा EMA वर प्राईस सपोर्ट घेत असेल)
+                if ("Support" in lvl_name) or ("EMA" in lvl_name and c_close >= lvl_val):
+                    if low_diff <= tol or close_diff <= tol:
                         is_hit = True
-                        status = "🟢 Support Near / Tested"
-                elif "Resistance" in lvl_name:
-                    if high_diff <= tol or diff_pct <= tol:
+                        status = f"🟢 Support Tested ({lvl_name})"
+
+                # रेझिस्टन्स मॅच (Swing High किंवा EMA वर प्राईस रेझिस्टन्स घेत असेल)
+                elif ("Resistance" in lvl_name) or ("EMA" in lvl_name and c_close <= lvl_val):
+                    if high_diff <= tol or close_diff <= tol:
                         is_hit = True
-                        status = "🔴 Resistance Near / Tested"
-                        
+                        status = f"🔴 Resistance Tested ({lvl_name})"
+
                 if is_hit:
                     matched.append({
                         "Symbol": sym,
@@ -105,11 +105,8 @@ def get_pivots_and_matches(symbols, interval, period, tol):
                         "Status": status,
                         "Matched Level": lvl_name,
                         "Level Price (₹)": round(lvl_val, 2),
-                        "फरक (%)": round(diff_pct, 2),
-                        "S1": round(s1, 2),
-                        "R1": round(r1, 2),
-                        "Swing Low": round(swing_low, 2),
-                        "Swing High": round(swing_high, 2)
+                        "फरक (₹)": round(c_close - lvl_val, 2),
+                        "फरक (%)": round(close_diff, 2)
                     })
                     break
         except Exception:
@@ -117,19 +114,22 @@ def get_pivots_and_matches(symbols, interval, period, tol):
             
     return pd.DataFrame(matched)
 
-# ----------------- Main UI -----------------
-st.write("शेअर्सचे सपोर्ट आणि रेझिस्टन्स लेव्हल्स शोधण्यासाठी डाव्या बाजूला **'शेअर्स स्कॅन करा'** बटणावर क्लिक करा.")
-
+# ----------------- UI Execution -----------------
 if scan_clicked:
-    with st.spinner("डेटा स्कॅन होत आहे, कृपया थांबा..."):
+    # जुना कॅश पूर्ण क्लिअर करून फ्रेश रन
+    st.session_state.pop('scan_results', None)
+    with st.spinner(f"'{tf_choice}' डेटा स्कॅन होत आहे..."):
         res_df = get_pivots_and_matches(NIFTY_STOCKS, interval, period, tolerance)
         st.session_state['scan_results'] = res_df
+        st.session_state['active_tf'] = tf_choice
 
 if 'scan_results' in st.session_state:
     res_df = st.session_state['scan_results']
+    current_tf = st.session_state.get('active_tf', tf_choice)
+    
     if not res_df.empty:
-        st.success(f"🎯 सापडलेले शेअर्स: {len(res_df)}")
-        st.dataframe(res_df[["Symbol", "LTP (₹)", "Status", "Matched Level", "Level Price (₹)", "फरक (%)"]], use_container_width=True)
+        st.success(f"🎯 सापडलेले शेअर्स: {len(res_df)} (Timeframe: {current_tf})")
+        st.dataframe(res_df.sort_values(by="फरक (%)"), use_container_width=True)
         
         # Chart
         st.markdown("---")
@@ -144,15 +144,22 @@ if 'scan_results' in st.session_state:
                 high=chart_df['High'],
                 low=chart_df['Low'],
                 close=chart_df['Close'],
-                name="Price"
+                name="किंमत"
             )])
             
-            fig.add_hline(y=row['Level Price (₹)'], line_dash="solid", line_color="gold", line_width=2.5,
-                          annotation_text=f"Matched: {row['Matched Level']} (₹{row['Level Price (₹)']})")
-            fig.add_hline(y=row['R1'], line_dash="dash", line_color="red", annotation_text="R1")
-            fig.add_hline(y=row['S1'], line_dash="dash", line_color="green", annotation_text="S1")
+            fig.add_hline(
+                y=row['Level Price (₹)'], 
+                line_dash="solid", 
+                line_color="gold", 
+                line_width=2.5,
+                annotation_text=f"Matched: {row['Matched Level']} (₹{row['Level Price (₹)']})"
+            )
             
-            fig.update_layout(title=f"{pick_stock} Chart", xaxis_rangeslider_visible=False, height=500)
+            fig.update_layout(
+                title=f"{pick_stock} ({current_tf}) - {row['Matched Level']}", 
+                xaxis_rangeslider_visible=False, 
+                height=500
+            )
             st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("दिलेल्या Tolerance मध्ये कोणताही शेअर मॅच झाला नाही. कृपया Tolerance वाढवून पुन्हा स्कॅन करा.")
+        st.warning(f"'{current_tf}' मध्ये दिलेल्या Tolerance वर कोणताही शेअर मॅच झाला नाही. कृपया Tolerance थोडे वाढवा.")
