@@ -1,85 +1,96 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# 1. Screenshot nusar exact 7 time frames chi mapping
+st.set_page_config(page_title="Nifty 200 Support & Resistance", layout="wide")
+
+st.title("📈 Nifty 200 Support & Resistance Analyzer")
+
+# Screenshot pramane 7 Timeframes
 TIMEFRAMES = {
-    "1 day in 5 minutes intervals": {"period": "1d", "interval": "5m"},
-    "5 days in 1 hour intervals": {"period": "5d", "interval": "60m"},
+    "1 day in 5 minutes intervals": {"period": "1d", "interval": "5m", "resample_4h": False},
+    "5 days in 1 hour intervals": {"period": "5d", "interval": "60m", "resample_4h": False},
     "1 month in 4 hours intervals": {"period": "1mo", "interval": "60m", "resample_4h": True},
-    "3 months in 1 day intervals": {"period": "3mo", "interval": "1d"},
-    "6 months in 1 day intervals": {"period": "6mo", "interval": "1d"},
-    "1 year in 1 day intervals": {"period": "1y", "interval": "1d"},
-    "5 years in 1 week intervals": {"period": "5y", "interval": "1wk"}
+    "3 months in 1 day intervals": {"period": "3mo", "interval": "1d", "resample_4h": False},
+    "6 months in 1 day intervals": {"period": "6mo", "interval": "1d", "resample_4h": False},
+    "1 year in 1 day intervals": {"period": "1y", "interval": "1d", "resample_4h": False},
+    "5 years in 1 week intervals": {"period": "5y", "interval": "1wk", "resample_4h": False}
 }
 
-def fetch_and_prepare_data(symbol, tf_config):
-    """Yahoo Finance varun data download ani process karto"""
-    df = yf.download(symbol, period=tf_config["period"], interval=tf_config["interval"], progress=False)
-    
-    if df.empty or len(df) < 5:
-        return None
-    
-    # MultiIndex columns aslyas flatten karne
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    
-    # 4 Hours interval sathi 1 Hour candles resample karne
-    if tf_config.get("resample_4h", False):
-        df = df.resample('4h').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        }).dropna()
-        
-    return df
+# Stock select karnyasaathi list (Nifty 200 mukhya stocks + custom input)
+default_stocks = [
+    "KOTAKBANK.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
+    "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", "INDIGO.NS"
+]
 
-def calculate_support_resistance(df):
-    """Classic Pivot Points ani Swing Levels calculate karto"""
-    high = df['High'].iloc[-2] if len(df) > 1 else df['High'].iloc[-1]
-    low = df['Low'].iloc[-2] if len(df) > 1 else df['Low'].iloc[-1]
-    close = df['Close'].iloc[-2] if len(df) > 1 else df['Close'].iloc[-1]
-    ltp = df['Close'].iloc[-1]
+selected_stock = st.selectbox("Stock निवडा किंवा टाईप करा:", default_stocks, index=0)
+
+def fetch_data(symbol, config):
+    try:
+        # 1. Purna data aadhi download hoto
+        data = yf.download(symbol, period=config["period"], interval=config["interval"], progress=False)
+        
+        if data is None or data.empty or len(data) < 3:
+            return None
+        
+        # 2. MultiIndex clean karne (NameError taalnasaathi)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            
+        # 3. 4H Candle banvane
+        if config["resample_4h"]:
+            data = data.resample('4h').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+            
+        return data
+    except Exception:
+        return None
+
+def get_levels(data):
+    # Previous Candle nusar Pivot calculate karto
+    h = float(data['High'].iloc[-2] if len(data) > 1 else data['High'].iloc[-1])
+    l = float(data['Low'].iloc[-2] if len(data) > 1 else data['Low'].iloc[-1])
+    c = float(data['Close'].iloc[-2] if len(data) > 1 else data['Close'].iloc[-1])
+    ltp = float(data['Close'].iloc[-1])
     
-    # Pivot Point Formula
-    pivot = (high + low + close) / 3
-    r1 = (2 * pivot) - low
-    s1 = (2 * pivot) - high
-    r2 = pivot + (high - low)
-    s2 = pivot - (high - low)
+    pivot = (h + l + c) / 3.0
+    r1 = (2.0 * pivot) - l
+    s1 = (2.0 * pivot) - h
+    r2 = pivot + (h - l)
+    s2 = pivot - (h - l)
     
-    # Recent Swing High ani Swing Low
-    lookback = min(20, len(df))
-    swing_res = df['High'].tail(lookback).max()
-    swing_supp = df['Low'].tail(lookback).min()
+    lookback = min(20, len(data))
+    swing_r = float(data['High'].tail(lookback).max())
+    swing_s = float(data['Low'].tail(lookback).min())
     
     return {
-        "LTP": round(float(ltp), 2),
-        "Pivot": round(float(pivot), 2),
-        "Support 1 (S1)": round(float(s1), 2),
-        "Resistance 1 (R1)": round(float(r1), 2),
-        "Support 2 (S2)": round(float(s2), 2),
-        "Resistance 2 (R2)": round(float(r2), 2),
-        "Swing Support": round(float(swing_supp), 2),
-        "Swing Resistance": round(float(swing_res), 2)
+        "LTP": round(ltp, 2),
+        "Pivot": round(pivot, 2),
+        "Support 1": round(s1, 2),
+        "Resistance 1": round(r1, 2),
+        "Support 2": round(s2, 2),
+        "Resistance 2": round(r2, 2),
+        "Swing Support": round(swing_s, 2),
+        "Swing Resistance": round(swing_r, 2)
     }
 
-def scan_stock(symbol):
-    """Stock chya sarva timeframes che support & resistance kadhto"""
-    results = {}
-    for tf_label, tf_config in TIMEFRAMES.items():
-        try:
-            df = fetch_and_prepare_data(symbol, tf_config)
-            if df is not None:
-                results[tf_label] = calculate_support_resistance(df)
-        except Exception as e:
-            continue
-    return pd.DataFrame(results).T
-
-# Example: Screenshot pramane KOTAKBANK kivha Nifty 200 stock
-stock_ticker = "KOTAKBANK.NS"
-print(f"=== Support and Resistance Levels: {stock_ticker} ===")
-levels_table = scan_stock(stock_ticker)
-print(levels_table)
+if st.button("Calculate Levels", type="primary"):
+    with st.spinner(f"{selected_stock} चे सर्व टाइमफ्रेम्स अ‍ॅनालाइज होत आहेत..."):
+        results = {}
+        for tf_name, cfg in TIMEFRAMES.items():
+            stock_df = fetch_data(selected_stock, cfg)
+            if stock_df is not None and not stock_df.empty:
+                results[tf_name] = get_levels(stock_df)
+                
+        if results:
+            df_final = pd.DataFrame(results).T
+            st.success(f"{selected_stock} चे Support आणि Resistance लेव्हल्स:")
+            st.dataframe(df_final, use_container_width=True)
+        else:
+            st.error("डेटा लोड करण्यात अडचण आली. कृपया पुन्हा प्रयत्न करा.")
