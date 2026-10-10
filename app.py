@@ -1,105 +1,126 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 
-def calculate_robust_sr(df, window=5, cluster_threshold=0.012):
-    """
-    df: Candlestick DataFrame (High, Low, Close, Volume)
-    window: Peak / Trough confirm karnyasathi candles (Fractals)
-    cluster_threshold: Ekach zonemadhil levels ekatra karnyacha percentage (1.2%)
-    """
+# पेज कॉन्फिगरेशन
+st.set_page_config(page_title="NSE सपोर्ट आणि रेझिस्टन्स अ‍ॅनालायझर", layout="wide")
+
+st.title("🎯 निफ्टी २००: मजबूत सपोर्ट आणि रेझिस्टन्स डॅशबोर्ड")
+
+# स्क्रीनशॉटप्रमाणे सर्व ७ टाइमफ्रेम्स
+TIMEFRAMES = {
+    "1 day in 5 minutes intervals": {"period": "1d", "interval": "5m", "resample_4h": False},
+    "5 days in 1 hour intervals": {"period": "5d", "interval": "60m", "resample_4h": False},
+    "1 month in 4 hours intervals": {"period": "1mo", "interval": "60m", "resample_4h": True},
+    "3 months in 1 day intervals": {"period": "3mo", "interval": "1d", "resample_4h": False},
+    "6 months in 1 day intervals": {"period": "6mo", "interval": "1d", "resample_4h": False},
+    "1 year in 1 day intervals": {"period": "1y", "interval": "1d", "resample_4h": False},
+    "5 years in 1 week intervals": {"period": "5y", "interval": "1wk", "resample_4h": False}
+}
+
+# निफ्टी २०० मधील मुख्य स्टॉक्स
+STOCKS_LIST = [
+    "KOTAKBANK.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
+    "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", 
+    "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS", "TATAMOTORS.NS", "SUNPHARMA.NS",
+    "INDIGO.NS", "TITAN.NS", "TATASTEEL.NS", "NTPC.NS", "POWERGRID.NS"
+]
+
+col1, col2 = st.columns([2, 1])
+with col1:
+    selected_stock = st.selectbox("स्टॉक निवडा:", STOCKS_LIST, index=0)
+with col2:
+    custom_stock = st.text_input("किंवा दुसरा NSE सिम्बॉल टाका (उदा. M&M.NS):")
+
+ticker = custom_stock.strip().upper() if custom_stock.strip() else selected_stock
+
+def get_clean_data(symbol, config):
+    """Yahoo Finance वरून सुरक्षितपणे डेटा डाऊनलोड करतो"""
+    try:
+        df = yf.download(symbol, period=config["period"], interval=config["interval"], progress=False)
+        if df is None or df.empty or len(df) < 5:
+            return None
+        
+        # MultiIndex कॉलम्स व्यवस्थित करणे
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        # ४ तासांची कॅण्डल तयार करणे
+        if config.get("resample_4h", False):
+            df = df.resample('4h').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+            
+        return df
+    except Exception:
+        return None
+
+def calculate_levels(df):
+    """पिव्होट आणि स्विंग हाय/लो नुसार लेव्हल्स काढतो"""
     highs = df['High'].values
     lows = df['Low'].values
     closes = df['Close'].values
     n = len(df)
     
-    raw_resistances = []
-    raw_supports = []
+    ltp = round(float(closes[-1]), 2)
     
-    # 1. Swing Highs ani Swing Lows shodhane (Fractal Pivot points)
+    # १. स्टँडर्ड पिव्होट लेव्हल्स
+    prev_h = float(highs[-2] if n > 1 else highs[-1])
+    prev_l = float(lows[-2] if n > 1 else lows[-1])
+    prev_c = float(closes[-2] if n > 1 else closes[-1])
+    
+    pivot = (prev_h + prev_l + prev_c) / 3.0
+    r1 = (2.0 * pivot) - prev_l
+    s1 = (2.0 * pivot) - prev_h
+    r2 = pivot + (prev_h - prev_l)
+    s2 = pivot - (prev_h - prev_l)
+    
+    # २. फ्रॅक्टल स्विंग लेव्हल्स (प्राइस अ‍ॅक्शन)
+    window = 3 if n < 30 else 5
+    raw_res = []
+    raw_supp = []
+    
     for i in range(window, n - window):
-        # Resistance condition: ithli price aagodar chya ani pudhchya 'window' candles peksha jast ahe
         if highs[i] == max(highs[i - window : i + window + 1]):
-            raw_resistances.append(highs[i])
-            
-        # Support condition: ithli price 'window' candles madhye sarvat kami ahe
+            raw_res.append(highs[i])
         if lows[i] == min(lows[i - window : i + window + 1]):
-            raw_supports.append(lows[i])
+            raw_supp.append(lows[i])
             
-    current_price = closes[-1]
+    valid_res = [r for r in raw_res if r > ltp]
+    valid_supp = [s for s in raw_supp if s < ltp]
     
-    # 2. Levels Cluster karne (ekmekanna javal aslelya levels cha zone banvane)
-    def cluster_levels(levels):
-        if not levels:
-            return []
-        levels = sorted(levels)
-        clusters = []
-        current_cluster = [levels[0]]
-        
-        for price in levels[1:]:
-            # Jar price pashil level chya threshold madhye asel tar tya cluster madhe joda
-            if (price - np.mean(current_cluster)) / np.mean(current_cluster) <= cluster_threshold:
-                current_cluster.append(price)
-            else:
-                clusters.append(current_cluster)
-                current_cluster = [price]
-        clusters.append(current_cluster)
-        
-        # Pratyek cluster chi mean price ani touch count kadhane
-        consolidated = []
-        for c in clusters:
-            level_price = round(float(np.mean(c)), 2)
-            touch_count = len(c)
-            consolidated.append((level_price, touch_count))
-            
-        return consolidated
+    # सर्वात जवळचा मजबूत आधार आणि अडथळा
+    majboot_r = round(float(min(valid_res)), 2) if valid_res else round(float(r1), 2)
+    majboot_s = round(float(max(valid_supp)), 2) if valid_supp else round(float(s1), 2)
+    
+    return {
+        "सध्याची किंमत (LTP)": ltp,
+        "पिव्होट पॉईंट": round(pivot, 2),
+        "मजबूत सपोर्ट": majboot_s,
+        "मजबूत रेझिस्टन्स": majboot_r,
+        "सपोर्ट १ (S1)": round(s1, 2),
+        "रेझिस्टन्स १ (R1)": round(r1, 2),
+        "सपोर्ट २ (S2)": round(s2, 2),
+        "रेझिस्टन्स २ (R2)": round(r2, 2)
+    }
 
-    res_clustered = cluster_levels(raw_resistances)
-    supp_clustered = cluster_levels(raw_supports)
-    
-    # Fakt Current Price chya varchya (Resistances) ani khalcya (Supports) filter karne
-    valid_resistances = [r for r in res_clustered if r[0] > current_price]
-    valid_supports = [s for s in supp_clustered if s[0] < current_price]
-    
-    # Sort: Current price chya sarvat javal aslelya levels
-    valid_resistances.sort(key=lambda x: x[0])             # Ascending (javalcha resistance aadhi)
-    valid_supports.sort(key=lambda x: x[0], reverse=True)  # Descending (javalcha support aadhi)
-    
-    return current_price, valid_supports, valid_resistances
-
-def run_analysis(ticker="KOTAKBANK.NS", period="6mo", interval="1d"):
-    data = yf.download(ticker, period=period, interval=interval, progress=False)
-    
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-        
-    if data.empty or len(data) < 30:
-        print("Data uplabdha nahi.")
-        return
-        
-    ltp, supports, resistances = calculate_robust_sr(data, window=5)
-    
-    print("=" * 55)
-    print(f"📊 STOCK: {ticker} | CURRENT PRICE (LTP): ₹{round(float(ltp), 2)}")
-    print("=" * 55)
-    
-    print("\n🔻 KEY SUPPORT LEVELS (खालचे मजबूत आधार):")
-    if supports:
-        for idx, (price, count) in enumerate(supports[:4], 1):
-            strength = "⭐⭐⭐ (Strong)" if count >= 3 else ("⭐⭐ (Moderate)" if count == 2 else "⭐ (Weak)")
-            print(f"  S{idx} : ₹{price:<8} | Touches: {count} वेळा टेस्ट | Strength: {strength}")
-    else:
-        print("  Konthahi majboot support sapadla nahi.")
-        
-    print("\n🔺 KEY RESISTANCE LEVELS (वरचे अडथळे):")
-    if resistances:
-        for idx, (price, count) in enumerate(resistances[:4], 1):
-            strength = "⭐⭐⭐ (Strong)" if count >= 3 else ("⭐⭐ (Moderate)" if count == 2 else "⭐ (Weak)")
-            print(f"  R{idx} : ₹{price:<8} | Touches: {count} वेळा टेस्ट | Strength: {strength}")
-    else:
-        print("  Konthahi majboot resistance sapadla nahi.")
-    print("=" * 55)
-
-# Run
-if __name__ == "__main__":
-    run_analysis("KOTAKBANK.NS", period="6mo", interval="1d")
+# अ‍ॅनालिसिस सुरू करण्याचे बटण
+if st.button("🚀 लेव्हल्स तपासा", type="primary"):
+    with st.spinner(f"{ticker} चे सर्व ७ टाइमफ्रेम्स अ‍ॅनालाइज होत आहेत..."):
+        all_results = {}
+        for tf_label, cfg in TIMEFRAMES.items():
+            df_stock = get_clean_data(ticker, cfg)
+            if df_stock is not None and not df_stock.empty:
+                all_results[tf_label] = calculate_levels(df_stock)
+                
+        if all_results:
+            st.success(f"✅ {ticker} चे सपोर्ट आणि रेझिस्टन्स लेव्हल्स तयार झाले आहेत:")
+            res_df = pd.DataFrame(all_results).T
+            st.dataframe(res_df, use_container_width=True)
+        else:
+            st.error("डेटा उपलब्ध होऊ शकला नाही. कृपया स्टॉक सिम्बॉल तपासा.")
