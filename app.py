@@ -1,219 +1,212 @@
-import pandas as pd
-import requests
 import streamlit as st
 import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
 
-# -------------------------------------------------------------------
-# १. पेज कॉन्फिगरेशन
-# -------------------------------------------------------------------
-st.set_page_config(
-    page_title="Nifty 200 Multi-Timeframe Scanner",
-    layout="wide",
-    page_icon="📈",
-)
-st.title("📊 Nifty 200 Multi-Timeframe Camarilla & EMA Scanner")
+st.set_page_config(page_title="Nifty 200 Price Match Scanner", layout="wide")
+st.title("🎯 Nifty 200 Price Match: Exact Support & Resistance")
 
-# -------------------------------------------------------------------
-# २. टेलिग्राम अलर्ट फंक्शन
-# -------------------------------------------------------------------
-def send_telegram_alert(bot_token, chat_id, message):
-    if not bot_token or not chat_id:
-        return False
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        return res.status_code == 200
-    except Exception:
-        return False
-
-
-# -------------------------------------------------------------------
-# ३. साइडबार सेटिंग्स (Timeframe, Telegram & Filters)
-# -------------------------------------------------------------------
-st.sidebar.header("⚙️ Timeframe & Settings")
-
-# सर्व मुख्य टाइमफ्रेम्सचा पर्याय
-timeframe_options = {
-    "15 Minute (Intraday)": {"interval": "15m", "period": "5d"},
-    "1 Hour (Intraday / Positional)": {"interval": "60m", "period": "1mo"},
-    "1 Day (Daily Swing)": {"interval": "1d", "period": "1y"},
-    "1 Week (Weekly Long-term)": {"interval": "1wk", "period": "2y"},
-}
-
-selected_tf_name = st.sidebar.selectbox(
-    "⏱️ Select Timeframe:", list(timeframe_options.keys()), index=2
-)
-selected_config = timeframe_options[selected_tf_name]
-
-st.sidebar.markdown("---")
-st.sidebar.header("📲 Telegram Alerts (ऐच्छिक)")
-bot_token = st.sidebar.text_input("Telegram Bot Token", type="password")
-chat_id = st.sidebar.text_input("Telegram Chat ID")
-
-scan_button = st.sidebar.button("🚀 Run Live Scan")
-
-# -------------------------------------------------------------------
-# ४. Nifty 200 स्टॉक लिस्ट मिळवणे
-# -------------------------------------------------------------------
-@st.cache_data(ttl=3600)
-def get_nifty200_symbols():
+# ----------------- 1. Nifty 200 Stock List -----------------
+@st.cache_data(ttl=86400)
+def load_nifty200():
     url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
     headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers)
-    df_indices = pd.read_csv(pd.io.common.BytesIO(res.content))
-    return [f"{s}.NS" for s in df_indices["Symbol"].tolist()]
+    try:
+        df = pd.read_csv(url, storage_options=headers)
+        return df[['Symbol', 'Company Name']]
+    except Exception:
+        fallback = {
+            "Symbol": ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "TATAMOTORS", "SBIN", "ITC", "LT", "AXISBANK"],
+            "Company Name": ["Reliance", "TCS", "HDFC Bank", "Infosys", "ICICI Bank", "Tata Motors", "SBI", "ITC", "L&T", "Axis Bank"]
+        }
+        return pd.DataFrame(fallback)
 
+n200_df = load_nifty200()
 
-# -------------------------------------------------------------------
-# ५. निवडलेल्या टाइमफ्रेमसाठी स्कॅनिंग लॉजिक
-# -------------------------------------------------------------------
-def run_scanner(tickers, interval, period):
-    data = yf.download(
-        tickers,
+# ----------------- 2. Sidebar Settings -----------------
+st.sidebar.header("🎯 Price Matching Settings")
+
+TIMEFRAME_MAP = {
+    "15 मिनिटे (Intraday)": {"interval": "15m", "period": "5d"},
+    "1 तास (Short Term)": {"interval": "60m", "period": "1mo"},
+    "1 दिवस (Daily Swing)": {"interval": "1d", "period": "6mo"},
+    "1 आठवडा (Positional)": {"interval": "1wk", "period": "1y"}
+}
+
+tf_choice = st.sidebar.selectbox("टाइमफ्रेम (Timeframe):", list(TIMEFRAME_MAP.keys()), index=2)
+interval = TIMEFRAME_MAP[tf_choice]["interval"]
+period = TIMEFRAME_MAP[tf_choice]["period"]
+
+match_type = st.sidebar.radio(
+    "Price Matching Mode:",
+    ["Exact Level Match (कॅन्डलने लेव्हल टेस्ट केली आहे)", "Tight Proximity (% Match)"]
+)
+
+# जर % Match निवडला तरच टॉलरन्स स्लाइडर दाखवणे
+if match_type == "Tight Proximity (% Match)":
+    match_tolerance = st.sidebar.slider("Tolerance (% मॅच अंतर):", min_value=0.05, max_value=0.50, value=0.15, step=0.05)
+else:
+    match_tolerance = 0.05  # अगदी नगण्य फरक (Exact साठी)
+
+swing_window = st.sidebar.slider("Swing Lookback Candles:", min_value=10, max_value=40, value=15)
+scan_button = st.sidebar.button("🚀 Match Scan सुरू करा")
+
+# ----------------- 3. Price Match Logic -----------------
+def scan_and_match(symbol_list, interval, period, window, tol, mode):
+    matched_results = []
+    tickers = [f"{s}.NS" for s in symbol_list]
+
+    raw_data = yf.download(
+        tickers=tickers,
         period=period,
         interval=interval,
-        group_by="ticker",
+        group_by='ticker',
         threads=True,
+        progress=False
     )
-    records = []
 
-    for sym in tickers:
+    for sym in symbol_list:
+        ticker = f"{sym}.NS"
         try:
-            df = data[sym].dropna()
-            if len(df) < 5:
+            if ticker not in raw_data.columns.levels[0]:
+                continue
+            df = raw_data[ticker].dropna()
+            if len(df) < window + 2:
                 continue
 
-            # मागील कँडल आणि चालू भाव
-            prev_high = float(df["High"].iloc[-2])
-            prev_low = float(df["Low"].iloc[-2])
-            prev_close = float(df["Close"].iloc[-2])
-            ltp = float(df["Close"].iloc[-1])
+            curr_candle = df.iloc[-1]
+            prev_candle = df.iloc[-2]
 
-            # Dynamic Moving Averages (डेटा पुरेसा असल्यास)
-            ema_20 = (
-                float(df["Close"].ewm(span=20, adjust=False).mean().iloc[-1])
-                if len(df) >= 20
-                else 0.0
-            )
-            ema_50 = (
-                float(df["Close"].ewm(span=50, adjust=False).mean().iloc[-1])
-                if len(df) >= 50
-                else 0.0
-            )
+            curr_close = curr_candle['Close']
+            curr_high = curr_candle['High']
+            curr_low = curr_candle['Low']
 
-            # Camarilla Levels (मागील कँडलच्या रेंजवरून)
-            rng = prev_high - prev_low
-            h4 = prev_close + (rng * (1.1 / 2))
-            h3 = prev_close + (rng * (1.1 / 4))
-            l3 = prev_close - (rng * (1.1 / 4))
-            l4 = prev_close - (rng * (1.1 / 2))
+            # Pivot Points (मागील पूर्ण कॅन्डलवरून)
+            p_high, p_low, p_close = prev_candle['High'], prev_candle['Low'], prev_candle['Close']
+            pivot = (p_high + p_low + p_close) / 3
+            r1 = (2 * pivot) - p_low
+            s1 = (2 * pivot) - p_high
 
-            # Pivot Point
-            pivot = (prev_high + prev_low + prev_close) / 3
+            # Swing Levels
+            swing_res = df['High'].iloc[-window:-1].max()
+            swing_sup = df['Low'].iloc[-window:-1].min()
 
-            # सिग्नल्स
-            if ltp > h4:
-                signal = "Bullish Breakout (Above H4)"
-            elif ltp < l4:
-                signal = "Bearish Breakdown (Below L4)"
-            elif h3 <= ltp <= h4:
-                signal = "Resistance Zone (H3-H4)"
-            elif l4 <= ltp <= l3:
-                signal = "Support Zone (L3-L4)"
-            else:
-                signal = "Normal Range"
+            levels = {
+                "Swing Support": swing_sup,
+                "Support 1 (S1)": s1,
+                "Swing Resistance": swing_res,
+                "Resistance 1 (R1)": r1
+            }
 
-            records.append(
-                {
-                    "Stock": sym.replace(".NS", ""),
-                    "LTP": round(ltp, 2),
-                    "H4_Breakout": round(h4, 2),
-                    "H3_Short": round(h3, 2),
-                    "L3_Buy": round(l3, 2),
-                    "L4_Breakdown": round(l4, 2),
-                    "Pivot": round(pivot, 2),
-                    "20_EMA": round(ema_20, 2) if ema_20 else "N/A",
-                    "50_EMA": round(ema_50, 2) if ema_50 else "N/A",
-                    "Signal": signal,
-                }
-            )
+            for level_name, level_price in levels.items():
+                is_matched = False
+                match_status = ""
+                diff_pct = abs(curr_close - level_price) / level_price * 100
+
+                if "Support" in level_name:
+                    if mode.startswith("Exact"):
+                        # कॅन्डलने सपोर्ट लेव्हलला खाली स्पर्श केला किंवा टेस्ट केला
+                        if curr_low <= level_price <= curr_high or abs(curr_low - level_price) / level_price * 100 <= 0.08:
+                            is_matched = True
+                            match_status = "🟢 Support Tested / Exact Hit"
+                    else:
+                        # Close प्राईस सपोर्टच्या अगदी जवळ मॅच झाली आहे
+                        if diff_pct <= tol:
+                            is_matched = True
+                            match_status = f"🟢 Near Support ({diff_pct:.2f}%)"
+
+                elif "Resistance" in level_name:
+                    if mode.startswith("Exact"):
+                        # कॅन्डलने रेझिस्टन्स लेव्हलला वर स्पर्श केला किंवा टेस्ट केला
+                        if curr_low <= level_price <= curr_high or abs(curr_high - level_price) / level_price * 100 <= 0.08:
+                            is_matched = True
+                            match_status = "🔴 Resistance Tested / Exact Hit"
+                    else:
+                        # Close प्राईस रेझिस्टन्सच्या अगदी जवळ मॅच झाली आहे
+                        if diff_pct <= tol:
+                            is_matched = True
+                            match_status = f"🔴 Near Resistance ({diff_pct:.2f}%)"
+
+                if is_matched:
+                    matched_results.append({
+                        "Symbol": sym,
+                        "LTP (₹)": round(curr_close, 2),
+                        "Matched Level": level_name,
+                        "Level Price (₹)": round(level_price, 2),
+                        "फरक (₹)": round(curr_close - level_price, 2),
+                        "फरक (%)": round(diff_pct, 2),
+                        "Status": match_status,
+                        "S1": round(s1, 2),
+                        "R1": round(r1, 2),
+                        "Swing Low": round(swing_sup, 2),
+                        "Swing High": round(swing_res, 2)
+                    })
+                    break  # एका शेअरसाठी एक प्रमुख मॅच सापडल्यास पुरेसे आहे
         except Exception:
             continue
 
-    return pd.DataFrame(records)
+    return pd.DataFrame(matched_results)
 
-
-# -------------------------------------------------------------------
-# ६. स्क्रीनवर निकाल दाखवणे
-# -------------------------------------------------------------------
-if scan_button:
-    with st.spinner(
-        f"Nifty 200 शेअर्स [{selected_tf_name}] टाइमफ्रेमवर स्कॅन होत आहेत..."
-    ):
-        tickers = get_nifty200_symbols()
-        scan_df = run_scanner(
-            tickers, selected_config["interval"], selected_config["period"]
+# ----------------- 4. Results & Display -----------------
+if scan_button or 'match_data' not in st.session_state:
+    with st.spinner("Nifty 200 शेअर्समध्ये Price Matching सुरू आहे..."):
+        match_df = scan_and_match(
+            n200_df['Symbol'].tolist(),
+            interval,
+            period,
+            swing_window,
+            match_tolerance,
+            match_type
         )
+        st.session_state['match_data'] = match_df
+        st.session_state['matched_tf'] = tf_choice
 
-    if not scan_df.empty:
-        bullish_df = scan_df[
-            scan_df["Signal"] == "Bullish Breakout (Above H4)"
-        ]
-        bearish_df = scan_df[
-            scan_df["Signal"] == "Bearish Breakdown (Below L4)"
-        ]
+match_df = st.session_state.get('match_data', pd.DataFrame())
 
-        # Top Summary Metrics
-        st.subheader(f"📌 Timeframe: {selected_tf_name}")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("एकूण स्टॉक्स", len(scan_df))
-        c2.metric("🟢 बुलिश ब्रेकआउट्स (H4)", len(bullish_df))
-        c3.metric("🔴 बेअरिश ब्रेकडाउन्स (L4)", len(bearish_df))
-
-        # फिल्टरिंग पर्याय
-        selected_signal = st.selectbox(
-            "सिग्नलनुसार फिल्टर करा:",
-            [
-                "All",
-                "Bullish Breakout (Above H4)",
-                "Bearish Breakdown (Below L4)",
-                "Resistance Zone (H3-H4)",
-                "Support Zone (L3-L4)",
-                "Normal Range",
-            ],
-        )
-
-        display_df = (
-            scan_df
-            if selected_signal == "All"
-            else scan_df[scan_df["Signal"] == selected_signal]
-        )
-        st.dataframe(display_df, use_container_width=True)
-
-        # Telegram वर मेसेज पाठवणे
-        if bot_token and chat_id and (len(bullish_df) > 0 or len(bearish_df) > 0):
-            msg = f"🚨 Nifty 200 Alert [{selected_tf_name}] 🚨\n\n"
-
-            if not bullish_df.empty:
-                msg += "🟢 Bullish Breakouts (Above H4):\n"
-                for _, row in bullish_df.head(15).iterrows():  # Top 15 stocks
-                    msg += f"• {row['Stock']}: ₹{row['LTP']} (H4: ₹{row['H4_Breakout']})\n"
-                msg += "\n"
-
-            if not bearish_df.empty:
-                msg += "🔴 Bearish Breakdowns (Below L4):\n"
-                for _, row in bearish_df.head(15).iterrows():
-                    msg += f"• {row['Stock']}: ₹{row['LTP']} (L4: ₹{row['L4_Breakdown']})\n"
-
-            success = send_telegram_alert(bot_token, chat_id, msg)
-            if success:
-                st.success("✅ Telegram वर अलर्ट पाठवला गेला!")
-            else:
-                st.error("❌ Telegram अलर्ट अयशस्वी. टोकन आणि चॅट आयडी तपासा.")
-    else:
-        st.error("डेटा खेचता आला नाही. इंटरनेट कनेक्शन तपासा.")
-else:
-    st.info(
-        "👈 डाव्या बाजूला *Timeframe* निवडा आणि *'Run Live Scan'* बटनावर क्लिक करा."
+if not match_df.empty:
+    st.success(f"🎯 अचूक मॅच झालेले शेअर्स: {len(match_df)} (Timeframe: {st.session_state.get('matched_tf')})")
+    
+    st.dataframe(
+        match_df.sort_values(by="फरक (%)")[["Symbol", "LTP (₹)", "Status", "Matched Level", "Level Price (₹)", "फरक (₹)", "फरक (%)"]],
+        use_container_width=True
     )
+
+    # ----------------- 5. Chart -----------------
+    st.markdown("---")
+    st.subheader("📊 Price Match तपासण्यासाठी चार्ट")
+    selected_stock = st.selectbox("शेअर निवडा:", match_df["Symbol"].unique())
+
+    if selected_stock:
+        chart_df = yf.download(f"{selected_stock}.NS", period=period, interval=interval, progress=False)
+        row = match_df[match_df["Symbol"] == selected_stock].iloc[0]
+
+        fig = go.Figure(data=[go.Candlestick(
+            x=chart_df.index,
+            open=chart_df['Open'],
+            high=chart_df['High'],
+            low=chart_df['Low'],
+            close=chart_df['Close'],
+            name="किंमत"
+        )])
+
+        # मॅच झालेली लेव्हल ठळक पिवळ्या रंगात दाखवणे
+        fig.add_hline(
+            y=row['Level Price (₹)'], 
+            line_dash="solid", 
+            line_color="gold", 
+            line_width=2.5,
+            annotation_text=f"MATCHED: {row['Matched Level']} (₹{row['Level Price (₹)']})"
+        )
+
+        fig.add_hline(y=row['R1'], line_dash="dash", line_color="crimson", annotation_text="R1")
+        fig.add_hline(y=row['S1'], line_dash="dash", line_color="mediumseagreen", annotation_text="S1")
+
+        fig.update_layout(
+            title=f"{selected_stock} - {row['Matched Level']} वर अचूक प्राईस मॅच",
+            yaxis_title="किंमत (₹)",
+            xaxis_rangeslider_visible=False,
+            height=500
+        )
+        st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("दिलेल्या निकषांवर नेमकी प्राईस मॅच सापडली नाही. तुम्ही Tolerance (%) वाढवू शकता किंवा दुसरा Timeframe निवडून स्कॅन करू शकता.")
