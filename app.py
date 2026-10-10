@@ -1,57 +1,33 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import plotly.graph_objects as go
+import numpy as np
 
-st.set_page_config(page_title="Nifty 200 Price Match Scanner", layout="wide")
-st.title("🎯 Nifty 200 Price Match: Exact Support & Resistance")
+def find_pivots(df, left_bars=3, right_bars=3):
+    """
+    खरे Swing High (Resistance) आणि Swing Low (Support) शोधणे
+    जिथे डाव्या आणि उजव्या कॅन्डल्सपेक्षा मधली कॅन्डल जास्त उंच/खालची असते.
+    """
+    df = df.copy()
+    df['is_swing_high'] = False
+    df['is_swing_low'] = False
 
-# ----------------- 1. Nifty 200 Stock List -----------------
-@st.cache_data(ttl=86400)
-def load_nifty200():
-    url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        df = pd.read_csv(url, storage_options=headers)
-        return df[['Symbol', 'Company Name']]
-    except Exception:
-        fallback = {
-            "Symbol": ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "TATAMOTORS", "SBIN", "ITC", "LT", "AXISBANK"],
-            "Company Name": ["Reliance", "TCS", "HDFC Bank", "Infosys", "ICICI Bank", "Tata Motors", "SBI", "ITC", "L&T", "Axis Bank"]
-        }
-        return pd.DataFrame(fallback)
+    for i in range(left_bars, len(df) - right_bars):
+        high_window = df['High'].iloc[i - left_bars : i + right_bars + 1]
+        low_window = df['Low'].iloc[i - left_bars : i + right_bars + 1]
 
-n200_df = load_nifty200()
+        if df['High'].iloc[i] == high_window.max():
+            df.iat[i, df.columns.get_loc('is_swing_high')] = True
 
-# ----------------- 2. Sidebar Settings -----------------
-st.sidebar.header("🎯 Price Matching Settings")
+        if df['Low'].iloc[i] == low_window.min():
+            df.iat[i, df.columns.get_loc('is_swing_low')] = True
 
-TIMEFRAME_MAP = {
-    "15 मिनिटे (Intraday)": {"interval": "15m", "period": "5d"},
-    "1 तास (Short Term)": {"interval": "60m", "period": "1mo"},
-    "1 दिवस (Daily Swing)": {"interval": "1d", "period": "6mo"},
-    "1 आठवडा (Positional)": {"interval": "1wk", "period": "1y"}
-}
+    swing_highs = df[df['is_swing_high']]['High'].tolist()
+    swing_lows = df[df['is_swing_low']]['Low'].tolist()
 
-tf_choice = st.sidebar.selectbox("टाइमफ्रेम (Timeframe):", list(TIMEFRAME_MAP.keys()), index=2)
-interval = TIMEFRAME_MAP[tf_choice]["interval"]
-period = TIMEFRAME_MAP[tf_choice]["period"]
+    # सर्वात अलीकडील 2 महत्त्वाचे लेव्हल्स घेणे
+    valid_res = swing_highs[-1] if len(swing_highs) > 0 else df['High'].max()
+    valid_sup = swing_lows[-1] if len(swing_lows) > 0 else df['Low'].min()
 
-match_type = st.sidebar.radio(
-    "Price Matching Mode:",
-    ["Exact Level Match (कॅन्डलने लेव्हल टेस्ट केली आहे)", "Tight Proximity (% Match)"]
-)
+    return valid_sup, valid_res
 
-# जर % Match निवडला तरच टॉलरन्स स्लाइडर दाखवणे
-if match_type == "Tight Proximity (% Match)":
-    match_tolerance = st.sidebar.slider("Tolerance (% मॅच अंतर):", min_value=0.05, max_value=0.50, value=0.15, step=0.05)
-else:
-    match_tolerance = 0.05  # अगदी नगण्य फरक (Exact साठी)
-
-swing_window = st.sidebar.slider("Swing Lookback Candles:", min_value=10, max_value=40, value=15)
-scan_button = st.sidebar.button("🚀 Match Scan सुरू करा")
-
-# ----------------- 3. Price Match Logic -----------------
 def scan_and_match(symbol_list, interval, period, window, tol, mode):
     matched_results = []
     tickers = [f"{s}.NS" for s in symbol_list]
@@ -71,7 +47,7 @@ def scan_and_match(symbol_list, interval, period, window, tol, mode):
             if ticker not in raw_data.columns.levels[0]:
                 continue
             df = raw_data[ticker].dropna()
-            if len(df) < window + 2:
+            if len(df) < 20:
                 continue
 
             curr_candle = df.iloc[-1]
@@ -81,15 +57,14 @@ def scan_and_match(symbol_list, interval, period, window, tol, mode):
             curr_high = curr_candle['High']
             curr_low = curr_candle['Low']
 
-            # Pivot Points (मागील पूर्ण कॅन्डलवरून)
+            # 1. Classical Pivot Points (Daily S1/R1)
             p_high, p_low, p_close = prev_candle['High'], prev_candle['Low'], prev_candle['Close']
             pivot = (p_high + p_low + p_close) / 3
             r1 = (2 * pivot) - p_low
             s1 = (2 * pivot) - p_high
 
-            # Swing Levels
-            swing_res = df['High'].iloc[-window:-1].max()
-            swing_sup = df['Low'].iloc[-window:-1].min()
+            # 2. अस्सल Swing Support आणि Resistance (Fractal Method)
+            swing_sup, swing_res = find_pivots(df, left_bars=2, right_bars=2)
 
             levels = {
                 "Swing Support": swing_sup,
@@ -101,112 +76,49 @@ def scan_and_match(symbol_list, interval, period, window, tol, mode):
             for level_name, level_price in levels.items():
                 is_matched = False
                 match_status = ""
-                diff_pct = abs(curr_close - level_price) / level_price * 100
+                
+                # Close प्राईसचा लेव्हलपासून फरक
+                close_diff_pct = abs(curr_close - level_price) / level_price * 100
+                
+                # High/Low चा लेव्हलपासून थेट फरक (Exact Touch तपासण्यासाठी)
+                low_diff_pct = abs(curr_low - level_price) / level_price * 100
+                high_diff_pct = abs(curr_high - level_price) / level_price * 100
 
                 if "Support" in level_name:
-                    if mode.startswith("Exact"):
-                        # कॅन्डलने सपोर्ट लेव्हलला खाली स्पर्श केला किंवा टेस्ट केला
-                        if curr_low <= level_price <= curr_high or abs(curr_low - level_price) / level_price * 100 <= 0.08:
-                            is_matched = True
-                            match_status = "🟢 Support Tested / Exact Hit"
-                    else:
-                        # Close प्राईस सपोर्टच्या अगदी जवळ मॅच झाली आहे
-                        if diff_pct <= tol:
-                            is_matched = True
-                            match_status = f"🟢 Near Support ({diff_pct:.2f}%)"
+                    # कॅन्डलच्या Low ने सपोर्टला अचूक स्पर्श केला (0.25% टॉलरन्सच्या आत) आणि किंमत तिथून वर Close झाली
+                    if low_diff_pct <= 0.25 and curr_close >= curr_low:
+                        is_matched = True
+                        match_status = f"🟢 Low Tested Support ({low_diff_pct:.2f}%)"
+                    elif mode != "Exact Level Match" and close_diff_pct <= tol:
+                        is_matched = True
+                        match_status = f"🟢 Near Support ({close_diff_pct:.2f}%)"
 
                 elif "Resistance" in level_name:
-                    if mode.startswith("Exact"):
-                        # कॅन्डलने रेझिस्टन्स लेव्हलला वर स्पर्श केला किंवा टेस्ट केला
-                        if curr_low <= level_price <= curr_high or abs(curr_high - level_price) / level_price * 100 <= 0.08:
-                            is_matched = True
-                            match_status = "🔴 Resistance Tested / Exact Hit"
-                    else:
-                        # Close प्राईस रेझिस्टन्सच्या अगदी जवळ मॅच झाली आहे
-                        if diff_pct <= tol:
-                            is_matched = True
-                            match_status = f"🔴 Near Resistance ({diff_pct:.2f}%)"
+                    # कॅन्डलच्या High ने रेझिस्टन्सला अचूक स्पर्श केला (0.25% टॉलरन्सच्या आत) आणि किंमत तिथून खाली आली
+                    if high_diff_pct <= 0.25 and curr_close <= curr_high:
+                        is_matched = True
+                        match_status = f"🔴 High Tested Resistance ({high_diff_pct:.2f}%)"
+                    elif mode != "Exact Level Match" and close_diff_pct <= tol:
+                        is_matched = True
+                        match_status = f"🔴 Near Resistance ({close_diff_pct:.2f}%)"
 
                 if is_matched:
+                    diff_val = curr_close - level_price
                     matched_results.append({
                         "Symbol": sym,
                         "LTP (₹)": round(curr_close, 2),
                         "Matched Level": level_name,
                         "Level Price (₹)": round(level_price, 2),
-                        "फरक (₹)": round(curr_close - level_price, 2),
-                        "फरक (%)": round(diff_pct, 2),
+                        "फरक (₹)": round(diff_val, 2),
+                        "फरक (%)": round(close_diff_pct, 2),
                         "Status": match_status,
                         "S1": round(s1, 2),
                         "R1": round(r1, 2),
                         "Swing Low": round(swing_sup, 2),
                         "Swing High": round(swing_res, 2)
                     })
-                    break  # एका शेअरसाठी एक प्रमुख मॅच सापडल्यास पुरेसे आहे
+                    break
         except Exception:
             continue
 
     return pd.DataFrame(matched_results)
-
-# ----------------- 4. Results & Display -----------------
-if scan_button or 'match_data' not in st.session_state:
-    with st.spinner("Nifty 200 शेअर्समध्ये Price Matching सुरू आहे..."):
-        match_df = scan_and_match(
-            n200_df['Symbol'].tolist(),
-            interval,
-            period,
-            swing_window,
-            match_tolerance,
-            match_type
-        )
-        st.session_state['match_data'] = match_df
-        st.session_state['matched_tf'] = tf_choice
-
-match_df = st.session_state.get('match_data', pd.DataFrame())
-
-if not match_df.empty:
-    st.success(f"🎯 अचूक मॅच झालेले शेअर्स: {len(match_df)} (Timeframe: {st.session_state.get('matched_tf')})")
-    
-    st.dataframe(
-        match_df.sort_values(by="फरक (%)")[["Symbol", "LTP (₹)", "Status", "Matched Level", "Level Price (₹)", "फरक (₹)", "फरक (%)"]],
-        use_container_width=True
-    )
-
-    # ----------------- 5. Chart -----------------
-    st.markdown("---")
-    st.subheader("📊 Price Match तपासण्यासाठी चार्ट")
-    selected_stock = st.selectbox("शेअर निवडा:", match_df["Symbol"].unique())
-
-    if selected_stock:
-        chart_df = yf.download(f"{selected_stock}.NS", period=period, interval=interval, progress=False)
-        row = match_df[match_df["Symbol"] == selected_stock].iloc[0]
-
-        fig = go.Figure(data=[go.Candlestick(
-            x=chart_df.index,
-            open=chart_df['Open'],
-            high=chart_df['High'],
-            low=chart_df['Low'],
-            close=chart_df['Close'],
-            name="किंमत"
-        )])
-
-        # मॅच झालेली लेव्हल ठळक पिवळ्या रंगात दाखवणे
-        fig.add_hline(
-            y=row['Level Price (₹)'], 
-            line_dash="solid", 
-            line_color="gold", 
-            line_width=2.5,
-            annotation_text=f"MATCHED: {row['Matched Level']} (₹{row['Level Price (₹)']})"
-        )
-
-        fig.add_hline(y=row['R1'], line_dash="dash", line_color="crimson", annotation_text="R1")
-        fig.add_hline(y=row['S1'], line_dash="dash", line_color="mediumseagreen", annotation_text="S1")
-
-        fig.update_layout(
-            title=f"{selected_stock} - {row['Matched Level']} वर अचूक प्राईस मॅच",
-            yaxis_title="किंमत (₹)",
-            xaxis_rangeslider_visible=False,
-            height=500
-        )
-        st.plotly_chart(fig, use_container_width=True)
-else:
-    st.warning("दिलेल्या निकषांवर नेमकी प्राईस मॅच सापडली नाही. तुम्ही Tolerance (%) वाढवू शकता किंवा दुसरा Timeframe निवडून स्कॅन करू शकता.")
