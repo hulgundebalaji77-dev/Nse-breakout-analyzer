@@ -1,174 +1,219 @@
+import pandas as pd
+import requests
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import math
 
-# Page setup
-st.set_page_config(page_title="Supply & Demand Zone Scanner", layout="wide")
-
-st.title("🎯 Strong Supply & Demand Zone Scanner")
-st.caption("७-८%+ शार्प मूव्ह आणि स्टीप अँगलवर आधारित प्रेडिक्टिव्ह सप्लाय व डिमांड झोन")
-
-# Sidebar Controls
-st.sidebar.header("कंट्रोल्स व पॅरामीटर्स")
-
-ticker = st.sidebar.text_input("स्टॉक टिकर (NSE साठी .NS लावा)", value="BAJFINANCE.NS")
-timeframe = st.sidebar.selectbox("टाइमफ्रेम (Timeframe)", ["1d", "1h"], index=0)
-period = st.sidebar.selectbox("डेटा पिरियड", ["6mo", "1y", "2y"], index=1)
-
-is_index = "NIFTY" in ticker.upper() or "^" in ticker
-
-default_threshold = 4.0 if is_index else 7.0
-min_move_pct = st.sidebar.slider(
-    "किमान हालचाल मर्यादा (% Move Threshold)", 
-    min_value=3.0, 
-    max_value=20.0, 
-    value=float(default_threshold), 
-    step=0.5
+# -------------------------------------------------------------------
+# १. पेज कॉन्फिगरेशन
+# -------------------------------------------------------------------
+st.set_page_config(
+    page_title="Nifty 200 Multi-Timeframe Scanner",
+    layout="wide",
+    page_icon="📈",
 )
+st.title("📊 Nifty 200 Multi-Timeframe Camarilla & EMA Scanner")
 
-max_bars = st.sidebar.slider(
-    "कमाल कँडल्स (तीव्रतेसाठी / Sharp Move Bars)", 
-    min_value=2, 
-    max_value=12, 
-    value=5, 
-    help="कमी कँडल्समध्ये मोठी मुव्ह आल्यास अँगल २५ अंशांपेक्षा तीव्र मानला जातो."
+# -------------------------------------------------------------------
+# २. टेलिग्राम अलर्ट फंक्शन
+# -------------------------------------------------------------------
+def send_telegram_alert(bot_token, chat_id, message):
+    if not bot_token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        return res.status_code == 200
+    except Exception:
+        return False
+
+
+# -------------------------------------------------------------------
+# ३. साइडबार सेटिंग्स (Timeframe, Telegram & Filters)
+# -------------------------------------------------------------------
+st.sidebar.header("⚙️ Timeframe & Settings")
+
+# सर्व मुख्य टाइमफ्रेम्सचा पर्याय
+timeframe_options = {
+    "15 Minute (Intraday)": {"interval": "15m", "period": "5d"},
+    "1 Hour (Intraday / Positional)": {"interval": "60m", "period": "1mo"},
+    "1 Day (Daily Swing)": {"interval": "1d", "period": "1y"},
+    "1 Week (Weekly Long-term)": {"interval": "1wk", "period": "2y"},
+}
+
+selected_tf_name = st.sidebar.selectbox(
+    "⏱️ Select Timeframe:", list(timeframe_options.keys()), index=2
 )
+selected_config = timeframe_options[selected_tf_name]
 
+st.sidebar.markdown("---")
+st.sidebar.header("📲 Telegram Alerts (ऐच्छिक)")
+bot_token = st.sidebar.text_input("Telegram Bot Token", type="password")
+chat_id = st.sidebar.text_input("Telegram Chat ID")
+
+scan_button = st.sidebar.button("🚀 Run Live Scan")
+
+# -------------------------------------------------------------------
+# ४. Nifty 200 स्टॉक लिस्ट मिळवणे
+# -------------------------------------------------------------------
 @st.cache_data(ttl=3600)
-def fetch_data(symbol, period, interval):
-    df = yf.download(symbol, period=period, interval=interval, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.dropna(inplace=True)
-    return df
+def get_nifty200_symbols():
+    url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    res = requests.get(url, headers=headers)
+    df_indices = pd.read_csv(pd.io.common.BytesIO(res.content))
+    return [f"{s}.NS" for s in df_indices["Symbol"].tolist()]
 
-df = fetch_data(ticker, period, timeframe)
 
-if df.empty:
-    st.error("डेटा लोड करता आला नाही. कृपया टिकर तपासा.")
-    st.stop()
-
-# ----------------------------------------------------
-# Logic: Strong Demand & Supply Zones Detection
-# ----------------------------------------------------
-def identify_zones(data, move_threshold, max_allowed_bars):
-    detected_zones = []
-    n = len(data)
-
-    for i in range(1, n - max_allowed_bars):
-        origin_candle = data.iloc[i]
-        
-        # Check moves across subsequent bars
-        for bar_offset in range(1, max_allowed_bars + 1):
-            target_idx = i + bar_offset
-            if target_idx >= n:
-                break
-            
-            target_candle = data.iloc[target_idx]
-            
-            # --- 1. Supply Zone (Sharp Fall / Drop) ---
-            pct_fall = ((origin_candle['High'] - target_candle['Low']) / origin_candle['High']) * 100
-            if pct_fall >= move_threshold:
-                # 50% Body / Zone of origin candle
-                candle_mid = (origin_candle['Open'] + origin_candle['Close']) / 2
-                zone_top = origin_candle['High']
-                zone_bottom = candle_mid
-                
-                detected_zones.append({
-                    "type": "Supply",
-                    "origin_date": data.index[i],
-                    "target_date": data.index[target_idx],
-                    "zone_top": zone_top,
-                    "zone_bottom": zone_bottom,
-                    "pct_move": pct_fall,
-                    "bars": bar_offset
-                })
-                break  # Origin zone captured, move to next candle
-                
-            # --- 2. Demand Zone (Sharp Rally / Advance) ---
-            pct_rise = ((target_candle['High'] - origin_candle['Low']) / origin_candle['Low']) * 100
-            if pct_rise >= move_threshold:
-                candle_mid = (origin_candle['Open'] + origin_candle['Close']) / 2
-                zone_top = candle_mid
-                zone_bottom = origin_candle['Low']
-                
-                detected_zones.append({
-                    "type": "Demand",
-                    "origin_date": data.index[i],
-                    "target_date": data.index[target_idx],
-                    "zone_top": zone_top,
-                    "zone_bottom": zone_bottom,
-                    "pct_move": pct_rise,
-                    "bars": bar_offset
-                })
-                break
-
-    return detected_zones
-
-zones = identify_zones(df, min_move_pct, max_bars)
-
-# ----------------------------------------------------
-# Chart Plotting
-# ----------------------------------------------------
-fig = go.Figure()
-
-# Candlestick chart
-fig.add_trace(go.Candlestick(
-    x=df.index,
-    open=df['Open'],
-    high=df['High'],
-    low=df['Low'],
-    close=df['Close'],
-    name='Price'
-))
-
-# Draw zones on chart
-last_date = df.index[-1]
-
-for zone in zones:
-    color = "rgba(239, 83, 80, 0.25)" if zone['type'] == "Supply" else "rgba(38, 166, 154, 0.25)"
-    border_color = "red" if zone['type'] == "Supply" else "green"
-
-    # Zone rectangle
-    fig.add_shape(
-        type="rect",
-        x0=zone['origin_date'],
-        y0=zone['zone_bottom'],
-        x1=last_date,
-        y1=zone['zone_top'],
-        fillcolor=color,
-        line=dict(color=border_color, width=1, dash="dot"),
+# -------------------------------------------------------------------
+# ५. निवडलेल्या टाइमफ्रेमसाठी स्कॅनिंग लॉजिक
+# -------------------------------------------------------------------
+def run_scanner(tickers, interval, period):
+    data = yf.download(
+        tickers,
+        period=period,
+        interval=interval,
+        group_by="ticker",
+        threads=True,
     )
+    records = []
 
-fig.update_layout(
-    title=f"{ticker} — Supply & Demand Zones",
-    yaxis_title="Price (₹)",
-    xaxis_title="Date",
-    xaxis_rangeslider_visible=False,
-    template="plotly_dark",
-    height=650
-)
+    for sym in tickers:
+        try:
+            df = data[sym].dropna()
+            if len(df) < 5:
+                continue
 
-st.plotly_chart(fig, use_container_width=True)
+            # मागील कँडल आणि चालू भाव
+            prev_high = float(df["High"].iloc[-2])
+            prev_low = float(df["Low"].iloc[-2])
+            prev_close = float(df["Close"].iloc[-2])
+            ltp = float(df["Close"].iloc[-1])
 
-# ----------------------------------------------------
-# Identified Zones Summary Table
-# ----------------------------------------------------
-st.subheader("शोधलेले झोन्स (Detected Zones Summary)")
+            # Dynamic Moving Averages (डेटा पुरेसा असल्यास)
+            ema_20 = (
+                float(df["Close"].ewm(span=20, adjust=False).mean().iloc[-1])
+                if len(df) >= 20
+                else 0.0
+            )
+            ema_50 = (
+                float(df["Close"].ewm(span=50, adjust=False).mean().iloc[-1])
+                if len(df) >= 50
+                else 0.0
+            )
 
-if zones:
-    table_data = []
-    for z in zones:
-        table_data.append({
-            "प्रकार (Type)": z['type'],
-            "तारीख (Date)": z['origin_date'].strftime('%Y-%m-%d'),
-            "झोन रेंज (₹)": f"{z['zone_bottom']:.2f} - {z['zone_top']:.2f}",
-            "हालचाल (Move %)": f"{z['pct_move']:.2f}%",
-            "कँडल्स संख्या (Bars)": z['bars']
-        })
-    st.dataframe(pd.DataFrame(table_data), use_container_width=True)
+            # Camarilla Levels (मागील कँडलच्या रेंजवरून)
+            rng = prev_high - prev_low
+            h4 = prev_close + (rng * (1.1 / 2))
+            h3 = prev_close + (rng * (1.1 / 4))
+            l3 = prev_close - (rng * (1.1 / 4))
+            l4 = prev_close - (rng * (1.1 / 2))
+
+            # Pivot Point
+            pivot = (prev_high + prev_low + prev_close) / 3
+
+            # सिग्नल्स
+            if ltp > h4:
+                signal = "Bullish Breakout (Above H4)"
+            elif ltp < l4:
+                signal = "Bearish Breakdown (Below L4)"
+            elif h3 <= ltp <= h4:
+                signal = "Resistance Zone (H3-H4)"
+            elif l4 <= ltp <= l3:
+                signal = "Support Zone (L3-L4)"
+            else:
+                signal = "Normal Range"
+
+            records.append(
+                {
+                    "Stock": sym.replace(".NS", ""),
+                    "LTP": round(ltp, 2),
+                    "H4_Breakout": round(h4, 2),
+                    "H3_Short": round(h3, 2),
+                    "L3_Buy": round(l3, 2),
+                    "L4_Breakdown": round(l4, 2),
+                    "Pivot": round(pivot, 2),
+                    "20_EMA": round(ema_20, 2) if ema_20 else "N/A",
+                    "50_EMA": round(ema_50, 2) if ema_50 else "N/A",
+                    "Signal": signal,
+                }
+            )
+        except Exception:
+            continue
+
+    return pd.DataFrame(records)
+
+
+# -------------------------------------------------------------------
+# ६. स्क्रीनवर निकाल दाखवणे
+# -------------------------------------------------------------------
+if scan_button:
+    with st.spinner(
+        f"Nifty 200 शेअर्स [{selected_tf_name}] टाइमफ्रेमवर स्कॅन होत आहेत..."
+    ):
+        tickers = get_nifty200_symbols()
+        scan_df = run_scanner(
+            tickers, selected_config["interval"], selected_config["period"]
+        )
+
+    if not scan_df.empty:
+        bullish_df = scan_df[
+            scan_df["Signal"] == "Bullish Breakout (Above H4)"
+        ]
+        bearish_df = scan_df[
+            scan_df["Signal"] == "Bearish Breakdown (Below L4)"
+        ]
+
+        # Top Summary Metrics
+        st.subheader(f"📌 Timeframe: {selected_tf_name}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("एकूण स्टॉक्स", len(scan_df))
+        c2.metric("🟢 बुलिश ब्रेकआउट्स (H4)", len(bullish_df))
+        c3.metric("🔴 बेअरिश ब्रेकडाउन्स (L4)", len(bearish_df))
+
+        # फिल्टरिंग पर्याय
+        selected_signal = st.selectbox(
+            "सिग्नलनुसार फिल्टर करा:",
+            [
+                "All",
+                "Bullish Breakout (Above H4)",
+                "Bearish Breakdown (Below L4)",
+                "Resistance Zone (H3-H4)",
+                "Support Zone (L3-L4)",
+                "Normal Range",
+            ],
+        )
+
+        display_df = (
+            scan_df
+            if selected_signal == "All"
+            else scan_df[scan_df["Signal"] == selected_signal]
+        )
+        st.dataframe(display_df, use_container_width=True)
+
+        # Telegram वर मेसेज पाठवणे
+        if bot_token and chat_id and (len(bullish_df) > 0 or len(bearish_df) > 0):
+            msg = f"🚨 Nifty 200 Alert [{selected_tf_name}] 🚨\n\n"
+
+            if not bullish_df.empty:
+                msg += "🟢 Bullish Breakouts (Above H4):\n"
+                for _, row in bullish_df.head(15).iterrows():  # Top 15 stocks
+                    msg += f"• {row['Stock']}: ₹{row['LTP']} (H4: ₹{row['H4_Breakout']})\n"
+                msg += "\n"
+
+            if not bearish_df.empty:
+                msg += "🔴 Bearish Breakdowns (Below L4):\n"
+                for _, row in bearish_df.head(15).iterrows():
+                    msg += f"• {row['Stock']}: ₹{row['LTP']} (L4: ₹{row['L4_Breakdown']})\n"
+
+            success = send_telegram_alert(bot_token, chat_id, msg)
+            if success:
+                st.success("✅ Telegram वर अलर्ट पाठवला गेला!")
+            else:
+                st.error("❌ Telegram अलर्ट अयशस्वी. टोकन आणि चॅट आयडी तपासा.")
+    else:
+        st.error("डेटा खेचता आला नाही. इंटरनेट कनेक्शन तपासा.")
 else:
-    st.info("दिलेल्या अटींनुसार कोणताही झोन सापडला नाही. साइडबारमधील पॅरामीटर्स थोडे बदलून पहा.")
+    st.info(
+        "👈 डाव्या बाजूला *Timeframe* निवडा आणि *'Run Live Scan'* बटनावर क्लिक करा."
+    )
