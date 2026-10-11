@@ -3,4 +3,6 @@ pandas
 plotly
 pyotp
 smartapi-python
+logzero
+websocket-client
 requests
