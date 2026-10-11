@@ -3,124 +3,150 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# पेज कॉन्फिगरेशन
-st.set_page_config(page_title="NSE सपोर्ट आणि रेझिस्टन्स अ‍ॅनालायझर", layout="wide")
+st.set_page_config(page_title="NSE 200 Multi-Timeframe S&R Screener", layout="wide")
 
-st.title("🎯 निफ्टी २००: मजबूत सपोर्ट आणि रेझिस्टन्स डॅशबोर्ड")
+st.title("📈 NSE Top 200 Support & Resistance Screener")
+st.caption("Custom Timeframe Support/Resistance Breakout & Breakdown Scanner")
 
-# स्क्रीनशॉटप्रमाणे सर्व ७ टाइमफ्रेम्स
-TIMEFRAMES = {
-    "1 day in 5 minutes intervals": {"period": "1d", "interval": "5m", "resample_4h": False},
-    "5 days in 1 hour intervals": {"period": "5d", "interval": "60m", "resample_4h": False},
-    "1 month in 4 hours intervals": {"period": "1mo", "interval": "60m", "resample_4h": True},
-    "3 months in 1 day intervals": {"period": "3mo", "interval": "1d", "resample_4h": False},
-    "6 months in 1 day intervals": {"period": "6mo", "interval": "1d", "resample_4h": False},
-    "1 year in 1 day intervals": {"period": "1y", "interval": "1d", "resample_4h": False},
-    "5 years in 1 week intervals": {"period": "5y", "interval": "1wk", "resample_4h": False}
-}
-
-# निफ्टी २०० मधील मुख्य स्टॉक्स
-STOCKS_LIST = [
-    "KOTAKBANK.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
-    "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", 
-    "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS", "TATAMOTORS.NS", "SUNPHARMA.NS",
-    "INDIGO.NS", "TITAN.NS", "TATASTEEL.NS", "NTPC.NS", "POWERGRID.NS"
+# NSE 200 मधील प्रमुख स्टॉक्स (प्रातिनिधिक यादी)
+NIFTY_200_TICKERS = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
+    "BHARTIARTL.NS", "SBIN.NS", "LICI.NS", "ITC.NS", "HINDUNILVR.NS",
+    "LT.NS", "BAJFINANCE.NS", "HCLTECH.NS", "MARUTI.NS", "SUNPHARMA.NS",
+    "ADANIENT.NS", "TATAMOTORS.NS", "KOTAKBANK.NS", "TITAN.NS", "ONGC.NS",
+    "NTPC.NS", "AXISBANK.NS", "DMART.NS", "POWERGRID.NS", "M&M.NS",
+    "ADANIPORTS.NS", "COALINDIA.NS", "BAJAJFINSV.NS", "ULTRACEMCO.NS", "WIPRO.NS",
+    "IOC.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "SIEMENS.NS", "GRASIM.NS",
+    "BEL.NS", "HAL.NS", "VEDL.NS", "PIDILITIND.NS", "BPCL.NS",
+    "DLF.NS", "INDIGO.NS", "EICHERMOT.NS", "TRENT.NS", "ZOMATO.NS",
+    "CHOLAFIN.NS", "HINDALCO.NS", "DIVISLAB.NS", "CIPLA.NS", "TECHM.NS"
 ]
 
-col1, col2 = st.columns([2, 1])
-with col1:
-    selected_stock = st.selectbox("स्टॉक निवडा:", STOCKS_LIST, index=0)
-with col2:
-    custom_stock = st.text_input("किंवा दुसरा NSE सिम्बॉल टाका (उदा. M&M.NS):")
+# --- साइडबार सेटिंग्ज ---
+st.sidebar.header("⚙️ Scanner Settings")
 
-ticker = custom_stock.strip().upper() if custom_stock.strip() else selected_stock
+# 1. Timeframe निवड
+timeframe_labels = {
+    "15 Minutes (Intraday)": {"interval": "15m", "period": "5d"},
+    "1 Hour (Short Swing)": {"interval": "60m", "period": "1mo"},
+    "1 Day (Daily Swing)": {"interval": "1d", "period": "6mo"},
+    "1 Week (Positional)": {"interval": "1wk", "period": "2y"}
+}
 
-def get_clean_data(symbol, config):
-    """Yahoo Finance वरून सुरक्षितपणे डेटा डाऊनलोड करतो"""
+selected_tf_label = st.sidebar.selectbox(
+    "Select Timeframe:",
+    list(timeframe_labels.keys()),
+    index=2  # Default: 1 Day
+)
+
+tf_config = timeframe_labels[selected_tf_label]
+interval = tf_config["interval"]
+period = tf_config["period"]
+
+# 2. कॅन्डल्स लुकबॅक (Lookback Candles)
+lookback_candles = st.sidebar.slider(
+    "S&R Lookback (मागील Candles ची संख्या):", 
+    min_value=10, 
+    max_value=60, 
+    value=20
+)
+
+# 3. Near S&R टॉलरन्स
+tolerance_pct = st.sidebar.slider(
+    "Near Breakout Margin (%):", 
+    min_value=0.1, 
+    max_value=2.0, 
+    value=0.5, 
+    step=0.1
+)
+
+# --- S&R कॅल्क्युलेशन फंक्शन ---
+def analyze_stock(ticker, interval, period, lookback, tol):
     try:
-        df = yf.download(symbol, period=config["period"], interval=config["interval"], progress=False)
-        if df is None or df.empty or len(df) < 5:
+        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        if df.empty or len(df) < lookback + 5:
             return None
         
-        # MultiIndex कॉलम्स व्यवस्थित करणे
+        # MultiIndex columns flatten करणे
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
-        # ४ तासांची कॅण्डल तयार करणे
-        if config.get("resample_4h", False):
-            df = df.resample('4h').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-            
-        return df
+
+        current_close = float(df['Close'].iloc[-1])
+        prev_close = float(df['Close'].iloc[-2])
+        
+        # मागील लुकबॅक कॅन्डल्सचा High आणि Low (चालू कॅन्डल वगळून)
+        high_series = df['High'].iloc[-(lookback + 1):-1]
+        low_series = df['Low'].iloc[-(lookback + 1):-1]
+        
+        resistance = float(high_series.max())
+        support = float(low_series.min())
+
+        diff_r = ((current_close - resistance) / resistance) * 100
+        diff_s = ((current_close - support) / support) * 100
+
+        # Breakout / Breakdown स्टेटस
+        if current_close > resistance:
+            status = "🚀 Resistance Breakout"
+        elif abs(diff_r) <= tol and current_close <= resistance:
+            status = "⚠️ Near Resistance"
+        elif current_close < support:
+            status = "🔻 Support Breakdown"
+        elif abs(diff_s) <= tol and current_close >= support:
+            status = "⚠️ Near Support"
+        else:
+            status = "Rangebound"
+
+        pct_change = ((current_close - prev_close) / prev_close) * 100
+
+        return {
+            "Symbol": ticker.replace(".NS", ""),
+            "LTP (₹)": round(current_close, 2),
+            "Change (%)": round(pct_change, 2),
+            f"Resistance ({lookback} bars)": round(resistance, 2),
+            f"Support ({lookback} bars)": round(support, 2),
+            "Status": status
+        }
     except Exception:
         return None
 
-def calculate_levels(df):
-    """पिव्होट आणि स्विंग हाय/लो नुसार लेव्हल्स काढतो"""
-    highs = df['High'].values
-    lows = df['Low'].values
-    closes = df['Close'].values
-    n = len(df)
-    
-    ltp = round(float(closes[-1]), 2)
-    
-    # १. स्टँडर्ड पिव्होट लेव्हल्स
-    prev_h = float(highs[-2] if n > 1 else highs[-1])
-    prev_l = float(lows[-2] if n > 1 else lows[-1])
-    prev_c = float(closes[-2] if n > 1 else closes[-1])
-    
-    pivot = (prev_h + prev_l + prev_c) / 3.0
-    r1 = (2.0 * pivot) - prev_l
-    s1 = (2.0 * pivot) - prev_h
-    r2 = pivot + (prev_h - prev_l)
-    s2 = pivot - (prev_h - prev_l)
-    
-    # २. फ्रॅक्टल स्विंग लेव्हल्स (प्राइस अ‍ॅक्शन)
-    window = 3 if n < 30 else 5
-    raw_res = []
-    raw_supp = []
-    
-    for i in range(window, n - window):
-        if highs[i] == max(highs[i - window : i + window + 1]):
-            raw_res.append(highs[i])
-        if lows[i] == min(lows[i - window : i + window + 1]):
-            raw_supp.append(lows[i])
-            
-    valid_res = [r for r in raw_res if r > ltp]
-    valid_supp = [s for s in raw_supp if s < ltp]
-    
-    # सर्वात जवळचा मजबूत आधार आणि अडथळा
-    majboot_r = round(float(min(valid_res)), 2) if valid_res else round(float(r1), 2)
-    majboot_s = round(float(max(valid_supp)), 2) if valid_supp else round(float(s1), 2)
-    
-    return {
-        "सध्याची किंमत (LTP)": ltp,
-        "पिव्होट पॉईंट": round(pivot, 2),
-        "मजबूत सपोर्ट": majboot_s,
-        "मजबूत रेझिस्टन्स": majboot_r,
-        "सपोर्ट १ (S1)": round(s1, 2),
-        "रेझिस्टन्स १ (R1)": round(r1, 2),
-        "सपोर्ट २ (S2)": round(s2, 2),
-        "रेझिस्टन्स २ (R2)": round(r2, 2)
-    }
+# --- स्कॅन ट्रिगर ---
+if st.button(f"🔍 Scan Stocks on {selected_tf_label}"):
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-# अ‍ॅनालिसिस सुरू करण्याचे बटण
-if st.button("🚀 लेव्हल्स तपासा", type="primary"):
-    with st.spinner(f"{ticker} चे सर्व ७ टाइमफ्रेम्स अ‍ॅनालाइज होत आहेत..."):
-        all_results = {}
-        for tf_label, cfg in TIMEFRAMES.items():
-            df_stock = get_clean_data(ticker, cfg)
-            if df_stock is not None and not df_stock.empty:
-                all_results[tf_label] = calculate_levels(df_stock)
-                
-        if all_results:
-            st.success(f"✅ {ticker} चे सपोर्ट आणि रेझिस्टन्स लेव्हल्स तयार झाले आहेत:")
-            res_df = pd.DataFrame(all_results).T
-            st.dataframe(res_df, use_container_width=True)
+    for idx, sym in enumerate(NIFTY_200_TICKERS):
+        status_text.text(f"Scanning {sym} ({idx+1}/{len(NIFTY_200_TICKERS)})...")
+        data = analyze_stock(sym, interval, period, lookback_candles, tolerance_pct)
+        if data:
+            results.append(data)
+        progress_bar.progress((idx + 1) / len(NIFTY_200_TICKERS))
+
+    status_text.empty()
+    progress_bar.empty()
+
+    if results:
+        df_res = pd.DataFrame(results)
+
+        breakouts = df_res[df_res['Status'] == "🚀 Resistance Breakout"]
+        breakdowns = df_res[df_res['Status'] == "🔻 Support Breakdown"]
+        near_levels = df_res[df_res['Status'].str.contains("Near")]
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Resistance Breakouts", len(breakouts))
+        col2.metric("Support Breakdowns", len(breakdowns))
+        col3.metric("Near Levels Watchlist", len(near_levels))
+
+        st.markdown(f"### निकाल: **{selected_tf_label}**")
+        
+        # फिल्टर: फक्त अ‍ॅक्शन घेण्यासारखे शेअर्स दाखवणे
+        actionable = df_res[df_res['Status'] != "Rangebound"]
+        if not actionable.empty:
+            st.dataframe(actionable, use_container_width=True)
         else:
-            st.error("डेटा उपलब्ध होऊ शकला नाही. कृपया स्टॉक सिम्बॉल तपासा.")
+            st.info("या Timeframe वर सध्या कोणताही ब्रेकआऊट किंवा ब्रेकडाऊन मिळालेला नाही.")
+            
+        with st.expander("सर्व शेअर्सची यादी पहा (Rangebound सह)"):
+            st.dataframe(df_res, use_container_width=True)
+    else:
+        st.warning("डेटा फेच करताना अडचण आली. कृपया इंटरनेट तपासा.")
