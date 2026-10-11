@@ -192,4 +192,6 @@ if "angel_results" in st.session_state:
     breakdowns = res_df[res_df['Status'] == "🔻 Support Breakdown"]
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Resistance Breakouts", len(breakouts
+    c1.metric("Resistance Breakouts", len(breakouts))
+c2.metric("Support Breakdowns", len(breakdowns))
+c3.metric("Inside Range (No Action)", len(res_df) - len(breakouts) - len(breakdowns))
