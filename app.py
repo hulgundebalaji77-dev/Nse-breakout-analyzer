@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import pyotp
+import requests
 from SmartApi import SmartConnect
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Angel One S&R Screener", layout="wide")
+st.set_page_config(page_title="NSE 200 S&R Screener", layout="wide")
 
-st.title("🎯 Angel One SmartAPI - Accurate S&R Screener")
+st.title("🎯 Angel One SmartAPI - NSE 200 Auto Filter S&R Screener")
 
 # --- 1. Angel One Credentials Configuration ---
 st.sidebar.header("🔐 SmartAPI Login Details")
@@ -20,28 +21,66 @@ TOTP_SECRET = st.sidebar.text_input("TOTP Secret Key", value="YOUR_TOTP_KEY", ty
 TIMEFRAME_MAP = {
     "5 Minutes (Intraday)": {"interval": "FIVE_MINUTE", "days": 2},
     "15 Minutes": {"interval": "FIFTEEN_MINUTE", "days": 5},
-    "1 Hour (Screenshot Match)": {"interval": "ONE_HOUR", "days": 15},
+    "1 Hour (Swing)": {"interval": "ONE_HOUR", "days": 15},
     "1 Day (Daily Swing)": {"interval": "ONE_DAY", "days": 60}
 }
 
 selected_tf = st.sidebar.selectbox("Select Timeframe:", list(TIMEFRAME_MAP.keys()), index=2)
 tf_config = TIMEFRAME_MAP[selected_tf]
 
-# Angel One NSE Token Mapping (TCS, Reliance, etc.)
-STOCK_TOKENS = {
-    "TCS": "11536",
-    "RELIANCE": "2885",
-    "HDFCBANK": "1333",
-    "INFY": "1594",
-    "ICICIBANK": "4963",
-    "SBIN": "3045",
-    "LT": "11483",
-    "BHARTIARTL": "10604",
-    "ITC": "1660",
-    "TATAMOTORS": "3456"
-}
+# --- 3. Nifty 200 सर्व शेअर्सची यादी ---
+NIFTY_200_SYMBOLS = [
+    "ABB", "ACC", "APLAPOLLO", "AUBANK", "ADANIENSOL", "ADANIENT", "ADANIGREEN", 
+    "ADANIPORTS", "ADANIPOWER", "ATGL", "ABCAPITAL", "ABFRL", "ALKEM", "AMBUJACEM", 
+    "APOLLOHOSP", "APOLLOTYRE", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "AUROPHARMA", 
+    "AXISBANK", "BSOFT", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BAJAJHLDNG", 
+    "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BANKINDIA", "BERGEPAINT", "BEL", 
+    "BHARATFORG", "BHEL", "BPCL", "BHARTIARTL", "BIOCON", "BOSCHLTD", "BRITANNIA", 
+    "CGPOWER", "CANBK", "CHAMBLFERT", "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", 
+    "COLPAL", "CONCOR", "COROMANDEL", "CROMPTON", "CUMMINSIND", "DLF", "DABUR", 
+    "DALBHARAT", "DEEPAKNTR", "DELHIVERY", "DIVISLAB", "DIXON", "LALPATHLAB", 
+    "DRREDDY", "EICHERMOT", "ESCORTS", "EXIDEIND", "NYKAA", "FEDERALBNK", "FACT", 
+    "FORTIS", "GAIL", "GMRINFRA", "GLENMARK", "GODREJCP", "GODREJPROP", "GRANULES", 
+    "GRASIM", "GUJGASLTD", "HAL", "HCLTECH", "HDFCAMC", "HDFCBANK", "HDFCLIFE", 
+    "HAVELLS", "HEROMOTOCO", "HINDALCO", "HINDCOPPER", "HINDPETRO", "HINDUNILVR", 
+    "HUDCO", "ICICIBANK", "ICICIGI", "ICICIPRULI", "IDFCFIRSTB", "IPCALAB", "IRB", 
+    "ITC", "INDIAMART", "INDIANB", "IEX", "IOC", "IRCTC", "IRFC", "IREDA", "IGL", 
+    "INDUSTOWER", "INDUSINDBK", "NAUKRI", "INFY", "INDIGO", "JINDALSTEL", "JIOFIN", 
+    "JSWENERGY", "JSWINFRA", "JSWSTEEL", "JUBLFOOD", "KALYANKJIL", "KEI", "KOTAKBANK", 
+    "LTF", "LT", "LTIM", "LICHSGFIN", "LICI", "LUPIN", "MRF", "M&MFIN", "M&M", 
+    "MANAPPURAM", "MARICO", "MARUTI", "MAXHEALTH", "MAZDOCK", "METROPOLIS", "MFSL", 
+    "MPHASIS", "MUTHOOTFIN", "NATCOPHARM", "NBCC", "NCC", "NHPC", "NMDC", "NTPC", 
+    "NATIONALUM", "NAVINFLUOR", "NESTLEIND", "NLCINDIA", "OBEROIRLTY", "ONGC", 
+    "OIL", "PAYTM", "OFSS", "PAGEIND", "PATANJALI", "PERSISTENT", "PETRONET", 
+    "PFIZER", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB", "POLICYBZR", "POLYCAB", 
+    "POONAWALLA", "PFC", "POWERGRID", "PRESTIGE", "RVNL", "RAILTEL", "RBLBANK", 
+    "REC", "RELIANCE", "SBICARD", "SBILIFE", "SJVN", "SRF", "MOTHERSON", "SAIL", 
+    "SHREECEM", "SHRIRAMFIN", "SIEMENS", "SOLARINDS", "SONACOMS", "SBIN", "SUNPHARMA", 
+    "SUNTV", "SUPREMEIND", "SUZLON", "SYNGENE", "TATACHEM", "TATACOMM", "TCS", 
+    "TATACONSUM", "TATAELXSI", "TATAMOTORS", "TATAPOWER", "TATASTEEL", "TATATECH", 
+    "TECHM", "TITAN", "TORNTPHARM", "TORNTPOWER", "TRENT", "TIINDIA", "UPL", 
+    "ULTRACEMCO", "UNIONBANK", "UBL", "UNITDSPR", "VBL", "VEDL", "VOLTAS", 
+    "WIPRO", "YESBANK", "ZOMATO", "ZYDUSLIFE"
+]
 
-# --- 3. Angel One Login Function ---
+# --- 4. Angel One Master Tokens ऑटोमॅटिक लोड करणे ---
+@st.cache_data(ttl=86400)
+def get_nifty200_tokens(symbols_list):
+    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    try:
+        resp = requests.get(url, timeout=15)
+        data = resp.json()
+        nse_eq_map = {
+            item['symbol'].replace('-EQ', ''): str(item['token'])
+            for item in data 
+            if item.get('exch_seg') == 'NSE' and item.get('symbol', '').endswith('-EQ')
+        }
+        token_dict = {sym: nse_eq_map[sym] for sym in symbols_list if sym in nse_eq_map}
+        return token_dict
+    except Exception:
+        return {}
+
+# --- 5. Angel One Login Session ---
 @st.cache_resource
 def get_smart_session(api_key, client_code, mpin, totp_key):
     try:
@@ -55,7 +94,7 @@ def get_smart_session(api_key, client_code, mpin, totp_key):
         st.sidebar.error(f"Login Error: {e}")
         return None
 
-# --- 4. Fetch Accurate Candle Data ---
+# --- 6. Live Candle Data आणणे ---
 def fetch_angel_candles(smart_api, token, interval, days_back):
     try:
         to_date = datetime.now()
@@ -73,7 +112,6 @@ def fetch_angel_candles(smart_api, token, interval, days_back):
         if not res or 'data' not in res or not res['data']:
             return None
 
-        # Dataframe build karne: [Timestamp, Open, High, Low, Close, Volume]
         df = pd.DataFrame(res['data'], columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
         df['Datetime'] = pd.to_datetime(df['Datetime'])
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -83,12 +121,11 @@ def fetch_angel_candles(smart_api, token, interval, days_back):
     except Exception:
         return None
 
-# --- 5. Breakout Logic ---
+# --- 7. Breakout Logic ---
 def check_angel_breakout(df, symbol):
     if df is None or len(df) < 3:
         return None
 
-    # Magchi purna jhaleli candle (-2) ani chalu running candle (-1)
     prev_candle = df.iloc[-2]
     curr_candle = df.iloc[-1]
 
@@ -114,26 +151,31 @@ def check_angel_breakout(df, symbol):
         "Status": status
     }
 
-# --- 6. Execution & Scanner Interface ---
+# --- 8. Execution & Interface ---
 api_client = None
 if API_KEY != "YOUR_API_KEY" and CLIENT_CODE != "YOUR_CLIENT_CODE":
     api_client = get_smart_session(API_KEY, CLIENT_CODE, MPIN, TOTP_SECRET)
 
-if st.button(f"🔍 Scan Stocks via Angel One ({selected_tf})"):
+token_map = get_nifty200_tokens(NIFTY_200_SYMBOLS)
+
+if st.button(f"🔍 Scan All Nifty 200 Stocks ({selected_tf})"):
     if not api_client:
-        st.error("Krupaya sidebar madhe accurate Angel One Credentials taka.")
+        st.error("कृपया sidebar मध्ये अचूक Angel One Credentials भरा.")
+    elif not token_map:
+        st.error("Angel One Scrip Master टोकन्स लोड करता आले नाहीत. इंटरनेट कनेक्शन तपासा.")
     else:
         results = []
         prog = st.progress(0)
         stat = st.empty()
+        total_stocks = len(token_map)
 
-        for idx, (sym, tok) in enumerate(STOCK_TOKENS.items()):
-            stat.text(f"Fetching live feed for {sym} ({idx+1}/{len(STOCK_TOKENS)})...")
+        for idx, (sym, tok) in enumerate(token_map.items()):
+            stat.text(f"Scanning {sym} ({idx+1}/{total_stocks})...")
             df_stock = fetch_angel_candles(api_client, tok, tf_config["interval"], tf_config["days"])
             info = check_angel_breakout(df_stock, sym)
             if info:
                 results.append(info)
-            prog.progress((idx + 1) / len(STOCK_TOKENS))
+            prog.progress((idx + 1) / total_stocks)
 
         stat.empty()
         prog.empty()
@@ -141,60 +183,13 @@ if st.button(f"🔍 Scan Stocks via Angel One ({selected_tf})"):
         if results:
             st.session_state["angel_results"] = pd.DataFrame(results)
 
-# Display Screener Results
+# --- 9. ऑटोमॅटिक फिल्टर झालेले टेबल्स (Resistance व Support) ---
 if "angel_results" in st.session_state:
     res_df = st.session_state["angel_results"]
+    
+    # थेट फिल्टर केलेले डेटाफ्रेम्स
     breakouts = res_df[res_df['Status'] == "🚀 Resistance Breakout"]
     breakdowns = res_df[res_df['Status'] == "🔻 Support Breakdown"]
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Resistance Breakouts", len(breakouts))
-    c2.metric("Support Breakdowns", len(breakdowns))
-    c3.metric("Inside Range", len(res_df) - len(breakouts) - len(breakdowns))
-
-    st.subheader(f"📊 Breakout List (100% Live Angel Feed)")
-    action_table = res_df[res_df['Status'] != "Inside Range"]
-    if not action_table.empty:
-        st.dataframe(action_table, use_container_width=True)
-    else:
-        st.info("Sadhya ya timeframe var kontahi breakout jhala nahi.")
-
-    # --- Candlestick Chart View ---
-    st.markdown("---")
-    st.subheader("🕯️ Live Angel One Candlestick Chart")
-    sel_sym = st.selectbox("Stock nivaada:", list(STOCK_TOKENS.keys()))
-
-    if sel_sym and api_client:
-        token = STOCK_TOKENS[sel_sym]
-        chart_df = fetch_angel_candles(api_client, token, tf_config["interval"], tf_config["days"])
-
-        if chart_df is not None and not chart_df.empty:
-            plot_candles = chart_df.tail(40)
-            res_p = float(plot_candles['High'].iloc[-2])
-            sup_p = float(plot_candles['Low'].iloc[-2])
-
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=plot_candles['Datetime'].dt.strftime('%d-%b %H:%M'),
-                open=plot_candles['Open'],
-                high=plot_candles['High'],
-                low=plot_candles['Low'],
-                close=plot_candles['Close'],
-                name=sel_sym
-            ))
-
-            fig.add_hline(y=res_p, line_dash="dash", line_color="green", line_width=2,
-                          annotation_text=f"Res (High): ₹{res_p:.2f}", annotation_position="top right")
-            fig.add_hline(y=sup_p, line_dash="dash", line_color="red", line_width=2,
-                          annotation_text=f"Sup (Low): ₹{sup_p:.2f}", annotation_position="bottom right")
-
-            fig.update_layout(
-                title=f"{sel_sym} — Angel One Official Live Candle Chart",
-                yaxis_title="Price (₹)",
-                xaxis_title="Time",
-                xaxis_rangeslider_visible=False,
-                template="plotly_dark",
-                height=520
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
+    c1.metric("Resistance Breakouts", len(breakouts
