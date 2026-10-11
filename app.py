@@ -2,33 +2,39 @@ import streamlit as st
 import pandas as pd
 import pyotp
 import requests
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from SmartApi import SmartConnect
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
 
-st.set_page_config(page_title="NSE 200 S&R Screener", layout="wide")
+st.set_page_config(page_title="NSE 200 Real-Time S&R Engine", layout="wide")
 
-st.title("🎯 Angel One SmartAPI - NSE 200 Auto Filter S&R Screener")
+st.title("⚡ NSE 200 Live Background S&R Scanner")
+st.caption("बॅकग्राउंडमध्ये सतत अपडेट होणारा रिअल-टाइम ब्रेकआऊट व ब्रेकडाऊन डॅशबोर्ड")
 
-# --- १. Angel One लॉगिन माहिती (Sidebar) ---
-st.sidebar.header("🔐 SmartAPI Login Details")
+# --- १. युझर क्रेडेंशियल्स आणि सेटिंग्ज ---
+st.sidebar.header("🔐 Angel One लॉगिन")
 API_KEY = st.sidebar.text_input("API Key", value="YOUR_API_KEY", type="password")
 CLIENT_CODE = st.sidebar.text_input("Client Code", value="YOUR_CLIENT_CODE")
 MPIN = st.sidebar.text_input("MPIN", value="YOUR_MPIN", type="password")
 TOTP_SECRET = st.sidebar.text_input("TOTP Secret Key", value="YOUR_TOTP_KEY", type="password")
 
-# --- २. Timeframe मॅपिंग ---
 TIMEFRAME_MAP = {
     "5 Minutes (Intraday)": {"interval": "FIVE_MINUTE", "days": 2},
     "15 Minutes": {"interval": "FIFTEEN_MINUTE", "days": 5},
     "1 Hour (Swing)": {"interval": "ONE_HOUR", "days": 15},
-    "1 Day (Daily Swing)": {"interval": "ONE_DAY", "days": 60}
+    "1 Day (Daily)": {"interval": "ONE_DAY", "days": 60}
 }
 
-selected_tf = st.sidebar.selectbox("Select Timeframe:", list(TIMEFRAME_MAP.keys()), index=2)
+selected_tf = st.sidebar.selectbox("Timeframe निवडा:", list(TIMEFRAME_MAP.keys()), index=2)
 tf_config = TIMEFRAME_MAP[selected_tf]
 
-# --- ३. Nifty 200 शेअर्सची यादी ---
+# बॅकग्राउंड स्कॅन इंटरव्हल (दर किती सेकंदांनी रि-स्कॅन व्हावे)
+scan_interval_sec = st.sidebar.slider("Background Scan Interval (सेकंद):", min_value=15, max_value=180, value=30, step=15)
+
+# --- २. Nifty 200 शेअर्सची यादी ---
 NIFTY_200_SYMBOLS = [
     "ABB", "ACC", "APLAPOLLO", "AUBANK", "ADANIENSOL", "ADANIENT", "ADANIGREEN", 
     "ADANIPORTS", "ADANIPOWER", "ATGL", "ABCAPITAL", "ABFRL", "ALKEM", "AMBUJACEM", 
@@ -63,24 +69,23 @@ NIFTY_200_SYMBOLS = [
     "WIPRO", "YESBANK", "ZOMATO", "ZYDUSLIFE"
 ]
 
-# --- ४. Angel One Master Tokens ऑटोमॅटिक लोड करणे ---
+# --- ३. Angel One Scrip Master टोकन्स ---
 @st.cache_data(ttl=86400)
-def get_nifty200_tokens(symbols_list):
+def get_nifty200_tokens(symbols):
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     try:
         resp = requests.get(url, timeout=15)
         data = resp.json()
-        nse_eq_map = {
+        nse_map = {
             item['symbol'].replace('-EQ', ''): str(item['token'])
             for item in data 
             if item.get('exch_seg') == 'NSE' and item.get('symbol', '').endswith('-EQ')
         }
-        token_dict = {sym: nse_eq_map[sym] for sym in symbols_list if sym in nse_eq_map}
-        return token_dict
+        return {sym: nse_map[sym] for sym in symbols if sym in nse_map}
     except Exception:
         return {}
 
-# --- ५. Angel One लॉगिन सेशन निर्मिती ---
+# --- ४. स्मार्ट सेशन इनिशियलायझेशन ---
 @st.cache_resource
 def get_smart_session(api_key, client_code, mpin, totp_key):
     try:
@@ -90,161 +95,136 @@ def get_smart_session(api_key, client_code, mpin, totp_key):
         if data['status']:
             return smart_api
         return None
-    except Exception as e:
-        st.sidebar.error(f"Login Error: {e}")
+    except Exception:
         return None
 
-# --- ६. Live Candle Data मिळवणे ---
-def fetch_angel_candles(smart_api, token, interval, days_back):
+# --- ५. सिंगल स्टॉक स्कॅन लॉजिक ---
+def scan_single_stock(smart_api, sym, tok, interval, days):
     try:
         to_date = datetime.now()
-        from_date = to_date - timedelta(days=days_back)
-
-        historic_param = {
+        from_date = to_date - timedelta(days=days)
+        param = {
             "exchange": "NSE",
-            "symboltoken": str(token),
+            "symboltoken": str(tok),
             "interval": interval,
             "fromdate": from_date.strftime("%Y-%m-%d 09:15"),
             "todate": to_date.strftime("%Y-%m-%d 15:30")
         }
-
-        res = smart_api.getCandleData(historic_param)
-        if not res or 'data' not in res or not res['data']:
+        res = smart_api.getCandleData(param)
+        if not res or 'data' not in res or not res['data'] or len(res['data']) < 3:
             return None
 
-        df = pd.DataFrame(res['data'], columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        df['Datetime'] = pd.to_datetime(df['Datetime'])
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            df[col] = df[col].astype(float)
+        data = res['data']
+        prev_candle = data[-2]
+        curr_candle = data[-1]
 
-        return df
+        last_high = float(prev_candle[2])  # High
+        last_low = float(prev_candle[3])   # Low
+        prev_close = float(prev_candle[4]) # Close
+        ltp = float(curr_candle[4])        # LTP
+
+        # स्टेटस तपासणे
+        if ltp > last_high:
+            status = "🚀 Resistance Breakout"
+        elif ltp < last_low:
+            status = "🔻 Support Breakdown"
+        else:
+            return None  # Rangebound असल्यास थेट वगळा (फक्त ब्रेकआऊट सेव्ह करा)
+
+        pct_chg = ((ltp - prev_close) / prev_close) * 100
+        candle_time = prev_candle[0]
+
+        return {
+            "Symbol": sym,
+            "LTP (₹)": round(ltp, 2),
+            "Change (%)": round(pct_chg, 2),
+            "Last High (Res)": round(last_high, 2),
+            "Last Low (Sup)": round(last_low, 2),
+            "Candle Time": candle_time,
+            "Status": status,
+            "Updated At": datetime.now().strftime("%H:%M:%S")
+        }
     except Exception:
         return None
 
-# --- ७. Breakout तपासणी लॉजिक ---
-def check_angel_breakout(df, symbol):
-    if df is None or len(df) < 3:
-        return None
+# --- ६. ग्लोबल स्टेट आणि बॅकग्राउंड स्कॅनर थ्रेड ---
+if "background_data" not in st.session_state:
+    st.session_state["background_data"] = pd.DataFrame()
+if "last_scan_time" not in st.session_state:
+    st.session_state["last_scan_time"] = "अजून सुरू नाही"
+if "is_worker_running" not in st.session_state:
+    st.session_state["is_worker_running"] = False
 
-    prev_candle = df.iloc[-2]
-    curr_candle = df.iloc[-1]
-
-    last_high = float(prev_candle['High'])
-    last_low = float(prev_candle['Low'])
-    ltp = float(curr_candle['Close'])
-
-    status = "Inside Range"
-    if ltp > last_high:
-        status = "🚀 Resistance Breakout"
-    elif ltp < last_low:
-        status = "🔻 Support Breakdown"
-
-    pct_chg = ((ltp - float(prev_candle['Close'])) / float(prev_candle['Close'])) * 100
-
-    return {
-        "Symbol": symbol,
-        "LTP (₹)": round(ltp, 2),
-        "Candle Chg (%)": round(pct_chg, 2),
-        "Last High (Res)": round(last_high, 2),
-        "Last Low (Sup)": round(last_low, 2),
-        "Candle Time": prev_candle['Datetime'].strftime("%d-%b %H:%M"),
-        "Status": status
-    }
-
-# --- ८. स्कॅनर रन करणे ---
+token_map = get_nifty200_tokens(NIFTY_200_SYMBOLS)
 api_client = None
 if API_KEY != "YOUR_API_KEY" and CLIENT_CODE != "YOUR_CLIENT_CODE":
     api_client = get_smart_session(API_KEY, CLIENT_CODE, MPIN, TOTP_SECRET)
 
-token_map = get_nifty200_tokens(NIFTY_200_SYMBOLS)
-
-if st.button(f"🔍 Scan All Nifty 200 Stocks ({selected_tf})"):
-    if not api_client:
-        st.error("कृपया sidebar मध्ये अचूक Angel One Credentials भरा.")
-    elif not token_map:
-        st.error("Angel One Scrip Master टोकन्स लोड करता आले नाहीत. इंटरनेट तपासा.")
-    else:
-        results = []
-        prog = st.progress(0)
-        stat = st.empty()
-        total_stocks = len(token_map)
-
-        for idx, (sym, tok) in enumerate(token_map.items()):
-            stat.text(f"Scanning {sym} ({idx+1}/{total_stocks})...")
-            df_stock = fetch_angel_candles(api_client, tok, tf_config["interval"], tf_config["days"])
-            info = check_angel_breakout(df_stock, sym)
-            if info:
-                results.append(info)
-            prog.progress((idx + 1) / total_stocks)
-
-        stat.empty()
-        prog.empty()
-
-        if results:
-            st.session_state["angel_results"] = pd.DataFrame(results)
-
-# --- ९. निकाल आणि ऑटो-फिल्टर टेबल्स (Syntax Error दुरुस्त) ---
-if "angel_results" in st.session_state:
-    res_df = st.session_state["angel_results"]
+def fast_parallel_scan():
+    """ThreadPool वापरून अतिजलद स्कॅन करणे"""
+    if not api_client or not token_map:
+        return
     
-    breakouts = res_df[res_df['Status'] == "🚀 Resistance Breakout"]
-    breakdowns = res_df[res_df['Status'] == "🔻 Support Breakdown"]
+    active_records = []
+    # 8 Threads मुळे २०० शेअर्स काही सेकंदांत पूर्ण होतात
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(scan_single_stock, api_client, sym, tok, tf_config["interval"], tf_config["days"])
+            for sym, tok in token_map.items()
+        ]
+        for f in futures:
+            res = f.result()
+            if res:
+                active_records.append(res)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Resistance Breakouts", len(breakouts))
-    c2.metric("Support Breakdowns", len(breakdowns))
-    c3.metric("Inside Range (No Action)", len(res_df) - len(breakouts) - len(breakdowns))
+    if active_records:
+        st.session_state["background_data"] = pd.DataFrame(active_records)
+    else:
+        st.session_state["background_data"] = pd.DataFrame(columns=["Symbol", "LTP (₹)", "Change (%)", "Last High (Res)", "Last Low (Sup)", "Status", "Updated At"])
+    
+    st.session_state["last_scan_time"] = datetime.now().strftime("%H:%M:%S")
+
+# --- ७. मुख्य डिस्प्ले आणि ऑटो-रिफ्रेश ---
+col_ctrl1, col_ctrl2 = st.columns([2, 1])
+with col_ctrl1:
+    st.write(f"🕒 **शेवटचे बॅकग्राउंड अपडेट:** `{st.session_state['last_scan_time']}`")
+with col_ctrl2:
+    auto_refresh = st.toggle("🔄 Auto Refresh (सतत चालू ठेवा)", value=True)
+
+# जर डेटा अजून नसेल किंवा मॅन्युअल रिफ्रेश हवा असेल तर लगेच स्कॅन करा
+if st.session_state["background_data"].empty and api_client:
+    with st.spinner("बॅकग्राउंड इंजिन सुरू होत आहे... २०० शेअर्स स्कॅन होत आहेत..."):
+        fast_parallel_scan()
+
+df_live = st.session_state["background_data"]
+
+if not df_live.empty:
+    breakouts = df_live[df_live['Status'] == "🚀 Resistance Breakout"]
+    breakdowns = df_live[df_live['Status'] == "🔻 Support Breakdown"]
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Resistance Breakouts", len(breakouts))
+    m2.metric("Support Breakdowns", len(breakdowns))
+    m3.metric("एकूण ॲक्शन शेअर्स", len(df_live))
 
     tab_res, tab_sup = st.tabs(["🚀 Resistance Breakout शेअर्स", "🔻 Support Breakdown शेअर्स"])
 
     with tab_res:
         if not breakouts.empty:
-            st.dataframe(breakouts, use_container_width=True)
+            st.dataframe(breakouts[["Symbol", "LTP (₹)", "Change (%)", "Last High (Res)", "Status", "Updated At"]], use_container_width=True)
         else:
-            st.info("निवडलेल्या Timeframe वर सध्या कोणताही Resistance Breakout सापडला नाही.")
+            st.info("सध्या कोणताही Resistance Breakout झालेला नाही.")
 
     with tab_sup:
         if not breakdowns.empty:
-            st.dataframe(breakdowns, use_container_width=True)
+            st.dataframe(breakdowns[["Symbol", "LTP (₹)", "Change (%)", "Last Low (Sup)", "Status", "Updated At"]], use_container_width=True)
         else:
-            st.info("निवडलेल्या Timeframe वर सध्या कोणताही Support Breakdown सापडला नाही.")
+            st.info("सध्या कोणताही Support Breakdown झालेला नाही.")
+else:
+    st.warning("कृपया Angel One चे योग्य Credentials भरा आणि स्कॅन सुरू करा.")
 
-    # --- १०. Live Candlestick Chart View ---
-    st.markdown("---")
-    st.subheader("🕯️ Live Angel One Candlestick Chart")
-    sel_sym = st.selectbox("Stock निवडा:", list(token_map.keys()))
-
-    if sel_sym and api_client and sel_sym in token_map:
-        token = token_map[sel_sym]
-        chart_df = fetch_angel_candles(api_client, token, tf_config["interval"], tf_config["days"])
-
-        if chart_df is not None and not chart_df.empty:
-            plot_candles = chart_df.tail(40)
-            res_p = float(plot_candles['High'].iloc[-2])
-            sup_p = float(plot_candles['Low'].iloc[-2])
-
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=plot_candles['Datetime'].dt.strftime('%d-%b %H:%M'),
-                open=plot_candles['Open'],
-                high=plot_candles['High'],
-                low=plot_candles['Low'],
-                close=plot_candles['Close'],
-                name=sel_sym
-            ))
-
-            fig.add_hline(y=res_p, line_dash="dash", line_color="green", line_width=2,
-                          annotation_text=f"Res (High): ₹{res_p:.2f}", annotation_position="top right")
-            fig.add_hline(y=sup_p, line_dash="dash", line_color="red", line_width=2,
-                          annotation_text=f"Sup (Low): ₹{sup_p:.2f}", annotation_position="bottom right")
-
-            fig.update_layout(
-                title=f"{sel_sym} — Angel One Official Live Candle Chart",
-                yaxis_title="Price (₹)",
-                xaxis_title="Time",
-                xaxis_rangeslider_visible=False,
-                template="plotly_dark",
-                height=520
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
+# ऑटोमॅटिक बॅकग्राउंड रिफ्रेश लूप (UI ब्लॉक न करता ठरावीक वेळेनंतर अपडेट)
+if auto_refresh and api_client:
+    time.sleep(scan_interval_sec)
+    fast_parallel_scan()
+    st.rerun()
